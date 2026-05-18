@@ -41,6 +41,7 @@ memory/
 
 # Local-only project notes (not for the public repo)
 PROJECT_SUMMARY.md
+PROJECT_DESCRIPTION.md
 
 # Build outputs at repo root
 VoiceKeyboard.exe
