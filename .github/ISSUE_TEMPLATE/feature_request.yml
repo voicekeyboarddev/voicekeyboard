@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new feature, shortcut token, or prompt improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: When I dictate ..., I want ... but currently ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example transcripts / before-and-after
+      description: For prompt-quality changes, list 2-3 transcripts with the current and desired outputs.
+      render: text
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

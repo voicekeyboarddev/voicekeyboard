@@ -1,31 +1,50 @@
+# Node / Vite
 node_modules/
 dist/
+*.tsbuildinfo
+
+# Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# Bundled runtime + downloaded models (large, fetched per-machine)
 src-tauri/resources/runtime/
 src-tauri/resources/models/
-src-tauri/resources/portable-config/
-*.tmp.wav
+
+# User-local config that shouldn't be checked in
 voice-keyboard.settings.json
+*.tmp.wav
 logs/
 
-# Build artefacts and large local files
-VoiceKeyboard.exe
+# Local model files anywhere
 *.gguf
 models/
 
-# Local profiling/benchmark artefacts
+# Local profiling / benchmark artefacts
 llama-*.log
 llama-*.csv
 llama-*.json
 llama-*.stderr.log
 llama-*.stdout.log
+cargo-check.*.log
 
-# Editor/OS noise
+# Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 
-# Local-only memory
+# AI agent / dev helper output
+.codex-logs/
+.claude/
 memory/
+
+# Build outputs at repo root
+VoiceKeyboard.exe
+*.exe
+*.msi
+
+# Environment / secrets
+.env
+.env.*
+!.env.example

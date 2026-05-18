@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 if (-not $Destination.Trim()) {
-    $Destination = Join-Path $env:APPDATA "CppGemma\VoiceKeyboard\config\models"
+    $Destination = Join-Path $env:APPDATA "VoiceKeyboard\VoiceKeyboard\config\models"
 }
 
 function Download-HuggingFaceFile(

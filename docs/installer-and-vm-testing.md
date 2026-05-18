@@ -163,7 +163,7 @@ Confirm these on the clean machine:
 
 - App launches without the source repo present.
 - `llama-server.exe` starts from installed resources.
-- No path points to `D:\AppsMade2\CppGemma`.
+- No path points back to the development checkout.
 - GGUF files copied after install are detected.
 - `Test model response` succeeds.
 - Audio test succeeds.

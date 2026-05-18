@@ -1043,7 +1043,7 @@ function settingsView(s: Snapshot) {
       </div>
       <label class="field common-terms-field">
         <span>Common terms (added to prompt)</span>
-        <textarea data-setting="common_terms" rows="4" placeholder="e.g. My email is ashish4reading@gmail.com&#10;Company: SNT Achievement&#10;Phone: +91-9999999999">${esc(s.settings.common_terms ?? "")}</textarea>
+        <textarea data-setting="common_terms" rows="4" placeholder="e.g. My email is jane.doe@example.com&#10;Company: Acme Inc.&#10;Phone: +1-555-0123">${esc(s.settings.common_terms ?? "")}</textarea>
       </label>
       <details class="advanced-settings">
         <summary>Advanced runtime paths</summary>

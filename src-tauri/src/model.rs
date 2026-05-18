@@ -1092,7 +1092,7 @@ Field state: gmail.com<<<CURSOR>>>\n\
 Transcript: press enter\n\
 Output: {{{{Enter}}}}\n\
 \n\
-Field state: aashish.vsnt@<<<CURSOR>>>\n\
+Field state: name.surname@<<<CURSOR>>>\n\
 Transcript: gmail dot com\n\
 Output: gmail.com\n\
 \n\
@@ -1288,7 +1288,7 @@ NEVER re-output text that already appears in the field state. NEVER re-construct
 Examples:\n\
   Field state: 'gmail.com<<<CURSOR>>>' + transcript 'press enter' → output {{{{Enter}}}} (NOT 'gmail.com{{{{Enter}}}}').\n\
   Field state: 'Robotics Group NIT<<<CURSOR>>>' + transcript 'press enter' → output {{{{Enter}}}}.\n\
-  Field state: 'aashish.vsnt@<<<CURSOR>>>' + transcript 'gmail dot com' → output gmail.com (cursor is mid-text, no Enter).\n\
+  Field state: 'name.surname@<<<CURSOR>>>' + transcript 'gmail dot com' → output gmail.com (cursor is mid-text, no Enter).\n\
   Field state: '<<<SELECTED:hello world>>>' + transcript 'goodbye' → output goodbye (replaces the selection).\n\
   Field state: '(empty)' + transcript 'open YouTube' → output https://www.youtube.com{{{{Enter}}}}.\n\
   Field state: '(empty)' + transcript 'hello there' → output Hello there.\n\
@@ -1338,7 +1338,7 @@ STEP 2 — WRAPPING IN BRACKETS (look for the phrase 'in brackets', 'in square b
 STEP 3 — GENERAL DICTATION:\n\
 - For key presses embed shortcut tokens: {{{{Enter}}}}, {{{{Tab}}}}, {{{{Escape}}}}, {{{{Backspace}}}}, {{{{Delete}}}}.\n\
 - Numeric values: 'number five' → 5; 'five hundred' → 500.\n\
-- Normalize spoken email addresses: 'Ashish the number four reading at gmail dot com' → ashish4reading@gmail.com.\n\
+- Normalize spoken email addresses: 'jane the number four doe at gmail dot com' → jane4doe@gmail.com.\n\
 - Normalize spoken domains: 'gmail dot com' → gmail.com{{{{Enter}}}}; 'amazon dot in' → amazon.in{{{{Enter}}}}. Brand in address bar: 'Netflix' → netflix.com{{{{Enter}}}}.\n\
 - 'next line' / 'new line' → {{{{Enter}}}}. 'next paragraph' → {{{{Enter}}}}{{{{Enter}}}}.\n\
 - 'press enter' / 'submit' / 'go' / 'search' (alone) → {{{{Enter}}}}.\n\

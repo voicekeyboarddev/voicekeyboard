@@ -1,0 +1,66 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more detail, the faster
+        it can be fixed.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: I held the left mouse button, said "..." and the app typed "..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Click into the address bar of Chrome
+        2. Hold left mouse button
+        3. Say "gmail dot com"
+        4. Release
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Voice Keyboard version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model file
+      placeholder: gemma-4-E4B-it.Q4_K_M.gguf
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU (and VRAM)
+      placeholder: RTX 4050 Laptop, 6 GB
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics output (optional but very helpful)
+      description: |
+        From the Diagnostics tab, copy the "Exact Model Inputs" block for the
+        failing request (prompt, context, audio path, model output).
+      render: text

@@ -99,7 +99,7 @@ impl Default for Settings {
 }
 
 pub fn config_dir() -> PathBuf {
-    ProjectDirs::from("local", "CppGemma", "VoiceKeyboard")
+    ProjectDirs::from("local", "VoiceKeyboard", "VoiceKeyboard")
         .map(|d| d.config_dir().to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
