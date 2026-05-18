@@ -96,7 +96,7 @@ You need Node.js LTS, Rust stable, and Visual Studio Build Tools with the
 "Desktop development with C++" workload.
 
 ```powershell
-git clone https://github.com/<your-fork>/voicekeyboard.git
+git clone https://github.com/voicekeyboarddev/voicekeyboard.git
 cd voicekeyboard
 npm install
 npm run tauri:dev          # dev build with hot reload

@@ -34,7 +34,7 @@ Prerequisites:
 - A Vulkan-capable GPU is recommended for end-to-end testing.
 
 ```powershell
-git clone https://github.com/<your-fork>/voicekeyboard.git
+git clone https://github.com/voicekeyboarddev/voicekeyboard.git
 cd voicekeyboard
 npm install
 npm run tauri:dev
