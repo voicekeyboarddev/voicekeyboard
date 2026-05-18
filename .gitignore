@@ -39,6 +39,9 @@ Thumbs.db
 .claude/
 memory/
 
+# Local-only project notes (not for the public repo)
+PROJECT_SUMMARY.md
+
 # Build outputs at repo root
 VoiceKeyboard.exe
 *.exe
