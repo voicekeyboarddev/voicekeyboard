@@ -1,0 +1,39 @@
+{
+    "$schema":  "https://schema.tauri.app/config/2",
+    "productName":  "Voice Keyboard",
+    "version":  "0.1.0",
+    "identifier":  "local.voice-keyboard",
+    "build":  {
+                  "beforeDevCommand":  "npm run dev",
+                  "devUrl":  "http://127.0.0.1:1421",
+                  "beforeBuildCommand":  "npm run build",
+                  "frontendDist":  "../dist"
+              },
+    "app":  {
+                "windows":  [
+                                {
+                                    "title":  "Voice Keyboard",
+                                    "width":  820,
+                                    "height":  560,
+                                    "minWidth":  680,
+                                    "minHeight":  460
+                                }
+                            ],
+                "security":  {
+                                 "csp":  null
+                             }
+            },
+    "bundle":  {
+                   "active":  true,
+                   "targets":  "all",
+                   "icon":  [
+                                "icons/32x32.png",
+                                "icons/128x128.png",
+                                "icons/256x256.png",
+                                "icons/icon.ico"
+                            ],
+                   "resources":  [
+                                     "resources/**/*"
+                                 ]
+               }
+}

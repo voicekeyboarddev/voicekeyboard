@@ -1,0 +1,634 @@
+     Running BeforeDevCommand (`npm run dev`)
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri for changes...
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 25.90s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\settings.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 23.26s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\audio.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0061][0m[1m[97m: this method takes 1 argument but 0 arguments were supplied[0m
+   [1m[96m--> [0msrc\lib.rs:436:20
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m|[0m         self.audio.start()?;
+    [1m[96m|[0m                    [1m[91m^^^^^[0m[1m[96m--[0m [1m[96margument #1 of type `&str` is missing[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: method defined here
+   [1m[96m--> [0msrc\audio.rs:111:12
+    [1m[96m|[0m
+[1m[96m111[0m [1m[96m|[0m     pub fn start(&self, device_name: &str) -> anyhow::Result<()> {
+    [1m[96m|[0m            [1m[92m^^^^^[0m        [1m[96m-----------------[0m
+[1m[96mhelp[0m: provide the argument
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m| [0m        self.audio.start([92m/* &str */[0m)?;
+    [1m[96m|[0m                          [92m++++++++++[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0061`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\context.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find value `WINDOW_SCREENSHOT_MAX_WIDTH` in this scope[0m
+   [1m[96m--> [0msrc\context.rs:806:22
+    [1m[96m|[0m
+[1m[96m806[0m [1m[96m|[0m         let scale = (WINDOW_SCREENSHOT_MAX_WIDTH as f64 / source_width as f64)
+    [1m[96m|[0m                      [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find value `WINDOW_SCREENSHOT_MAX_HEIGHT` in this scope[0m
+   [1m[96m--> [0msrc\context.rs:807:18
+    [1m[96m|[0m
+[1m[96m807[0m [1m[96m|[0m             .min(WINDOW_SCREENSHOT_MAX_HEIGHT as f64 / source_height as f64)
+    [1m[96m|[0m                  [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0061][0m[1m[97m: this function takes 3 arguments but 4 arguments were supplied[0m
+   [1m[96m--> [0msrc\context.rs:98:21
+    [1m[96m|[0m
+[1m[96m 98[0m [1m[96m|[0m                     capture_window_screenshot(hwnd, x, y, screenshot).or_else(|| {
+    [1m[96m|[0m                     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^[0m             [1m[96m----------[0m [1m[96munexpected argument #4 of type `ScreenshotConfig`[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: function defined here
+   [1m[96m--> [0msrc\context.rs:791:4
+    [1m[96m|[0m
+[1m[96m791[0m [1m[96m|[0m fn capture_window_screenshot(
+    [1m[96m|[0m    [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[96mhelp[0m: remove the extra argument
+    [1m[96m|[0m
+[1m[96m 98[0m [91m- [0m                    capture_window_screenshot(hwnd, x, y[91m, screenshot[0m).or_else(|| {
+[1m[96m 98[0m [92m+ [0m                    capture_window_screenshot(hwnd, x, y).or_else(|| {
+    [1m[96m|[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0061][0m[1m[97m: this method takes 1 argument but 0 arguments were supplied[0m
+   [1m[96m--> [0msrc\lib.rs:436:20
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m|[0m         self.audio.start()?;
+    [1m[96m|[0m                    [1m[91m^^^^^[0m[1m[96m--[0m [1m[96margument #1 of type `&str` is missing[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: method defined here
+   [1m[96m--> [0msrc\audio.rs:111:12
+    [1m[96m|[0m
+[1m[96m111[0m [1m[96m|[0m     pub fn start(&self, device_name: &str) -> anyhow::Result<()> {
+    [1m[96m|[0m            [1m[92m^^^^^[0m        [1m[96m-----------------[0m
+[1m[96mhelp[0m: provide the argument
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m| [0m        self.audio.start([92m/* &str */[0m)?;
+    [1m[96m|[0m                          [92m++++++++++[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mSome errors have detailed explanations: E0061, E0425.[0m
+[1m[97mFor more information about an error, try `rustc --explain E0061`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 4 previous errors
+        Info File src-tauri\src\context.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0061][0m[1m[97m: this method takes 1 argument but 0 arguments were supplied[0m
+   [1m[96m--> [0msrc\lib.rs:436:20
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m|[0m         self.audio.start()?;
+    [1m[96m|[0m                    [1m[91m^^^^^[0m[1m[96m--[0m [1m[96margument #1 of type `&str` is missing[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: method defined here
+   [1m[96m--> [0msrc\audio.rs:111:12
+    [1m[96m|[0m
+[1m[96m111[0m [1m[96m|[0m     pub fn start(&self, device_name: &str) -> anyhow::Result<()> {
+    [1m[96m|[0m            [1m[92m^^^^^[0m        [1m[96m-----------------[0m
+[1m[96mhelp[0m: provide the argument
+    [1m[96m|[0m
+[1m[96m436[0m [1m[96m| [0m        self.audio.start([92m/* &str */[0m)?;
+    [1m[96m|[0m                          [92m++++++++++[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0061`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: struct `AudioInputDevice` is never constructed[0m
+   [1m[96m--> [0msrc\audio.rs:154:12
+    [1m[96m|[0m
+[1m[96m154[0m [1m[96m|[0m pub struct AudioInputDevice {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `input_devices` is never used[0m
+   [1m[96m--> [0msrc\audio.rs:159:8
+    [1m[96m|[0m
+[1m[96m159[0m [1m[96m|[0m pub fn input_devices() -> anyhow::Result<Vec<AudioInputDevice>> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `active_window_context_with_screenshot_settings` is never used[0m
+  [1m[96m--> [0msrc\context.rs:53:8
+   [1m[96m|[0m
+[1m[96m53[0m [1m[96m|[0m pub fn active_window_context_with_screenshot_settings(settings: &Settings) -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: struct `AudioInputDevice` is never constructed[0m
+   [1m[96m--> [0msrc\audio.rs:154:12
+    [1m[96m|[0m
+[1m[96m154[0m [1m[96m|[0m pub struct AudioInputDevice {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `input_devices` is never used[0m
+   [1m[96m--> [0msrc\audio.rs:159:8
+    [1m[96m|[0m
+[1m[96m159[0m [1m[96m|[0m pub fn input_devices() -> anyhow::Result<Vec<AudioInputDevice>> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `list_audio_input_devices` is never used[0m
+    [1m[96m--> [0msrc\lib.rs:2056:4
+     [1m[96m|[0m
+[1m[96m2056[0m [1m[96m|[0m fn list_audio_input_devices() -> Result<Vec<audio::AudioInputDevice>, String> {
+     [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: struct `AudioInputDevice` is never constructed[0m
+   [1m[96m--> [0msrc\audio.rs:154:12
+    [1m[96m|[0m
+[1m[96m154[0m [1m[96m|[0m pub struct AudioInputDevice {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `input_devices` is never used[0m
+   [1m[96m--> [0msrc\audio.rs:159:8
+    [1m[96m|[0m
+[1m[96m159[0m [1m[96m|[0m pub fn input_devices() -> anyhow::Result<Vec<AudioInputDevice>> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_WIDTH` is never used[0m
+ [1m[96m--> [0msrc\context.rs:6:7
+  [1m[96m|[0m
+[1m[96m6[0m [1m[96m|[0m const SCREENSHOT_WIDTH: u32 = 160;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_HEIGHT` is never used[0m
+ [1m[96m--> [0msrc\context.rs:7:7
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m const SCREENSHOT_HEIGHT: u32 = 100;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `active_window_context_with_screenshot` is never used[0m
+  [1m[96m--> [0msrc\context.rs:48:8
+   [1m[96m|[0m
+[1m[96m48[0m [1m[96m|[0m pub fn active_window_context_with_screenshot() -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `window_context_at_point` is never used[0m
+  [1m[96m--> [0msrc\context.rs:59:8
+   [1m[96m|[0m
+[1m[96m59[0m [1m[96m|[0m pub fn window_context_at_point(x: i32, y: i32) -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `list_audio_input_devices` is never used[0m
+    [1m[96m--> [0msrc\lib.rs:2056:4
+     [1m[96m|[0m
+[1m[96m2056[0m [1m[96m|[0m fn list_audio_input_devices() -> Result<Vec<audio::AudioInputDevice>, String> {
+     [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: struct `AudioInputDevice` is never constructed[0m
+   [1m[96m--> [0msrc\audio.rs:154:12
+    [1m[96m|[0m
+[1m[96m154[0m [1m[96m|[0m pub struct AudioInputDevice {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `input_devices` is never used[0m
+   [1m[96m--> [0msrc\audio.rs:159:8
+    [1m[96m|[0m
+[1m[96m159[0m [1m[96m|[0m pub fn input_devices() -> anyhow::Result<Vec<AudioInputDevice>> {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_WIDTH` is never used[0m
+ [1m[96m--> [0msrc\context.rs:6:7
+  [1m[96m|[0m
+[1m[96m6[0m [1m[96m|[0m const SCREENSHOT_WIDTH: u32 = 160;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_HEIGHT` is never used[0m
+ [1m[96m--> [0msrc\context.rs:7:7
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m const SCREENSHOT_HEIGHT: u32 = 100;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `active_window_context_with_screenshot` is never used[0m
+  [1m[96m--> [0msrc\context.rs:48:8
+   [1m[96m|[0m
+[1m[96m48[0m [1m[96m|[0m pub fn active_window_context_with_screenshot() -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `window_context_at_point` is never used[0m
+  [1m[96m--> [0msrc\context.rs:59:8
+   [1m[96m|[0m
+[1m[96m59[0m [1m[96m|[0m pub fn window_context_at_point(x: i32, y: i32) -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_WIDTH` is never used[0m
+ [1m[96m--> [0msrc\context.rs:6:7
+  [1m[96m|[0m
+[1m[96m6[0m [1m[96m|[0m const SCREENSHOT_WIDTH: u32 = 160;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^[0m
+  [1m[96m|[0m
+  [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_HEIGHT` is never used[0m
+ [1m[96m--> [0msrc\context.rs:7:7
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m const SCREENSHOT_HEIGHT: u32 = 100;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `active_window_context_with_screenshot` is never used[0m
+  [1m[96m--> [0msrc\context.rs:48:8
+   [1m[96m|[0m
+[1m[96m48[0m [1m[96m|[0m pub fn active_window_context_with_screenshot() -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `window_context_at_point` is never used[0m
+  [1m[96m--> [0msrc\context.rs:59:8
+   [1m[96m|[0m
+[1m[96m59[0m [1m[96m|[0m pub fn window_context_at_point(x: i32, y: i32) -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 4 warnings
+[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 29.96s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\audio.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_WIDTH` is never used[0m
+ [1m[96m--> [0msrc\context.rs:6:7
+  [1m[96m|[0m
+[1m[96m6[0m [1m[96m|[0m const SCREENSHOT_WIDTH: u32 = 160;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^[0m
+  [1m[96m|[0m
+  [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: constant `SCREENSHOT_HEIGHT` is never used[0m
+ [1m[96m--> [0msrc\context.rs:7:7
+  [1m[96m|[0m
+[1m[96m7[0m [1m[96m|[0m const SCREENSHOT_HEIGHT: u32 = 100;
+  [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `active_window_context_with_screenshot` is never used[0m
+  [1m[96m--> [0msrc\context.rs:48:8
+   [1m[96m|[0m
+[1m[96m48[0m [1m[96m|[0m pub fn active_window_context_with_screenshot() -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `window_context_at_point` is never used[0m
+  [1m[96m--> [0msrc\context.rs:61:8
+   [1m[96m|[0m
+[1m[96m61[0m [1m[96m|[0m pub fn window_context_at_point(x: i32, y: i32) -> Option<WindowContext> {
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 4 warnings
+[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 23.07s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\context.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 21.00s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\settings.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model_setup.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\settings.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…        Info File src-tauri\src\model_setup.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model_setup.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model_setup.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 14.82s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `search_box_extra_instructions` in this scope[0m
+   [1m[96m--> [0msrc\model.rs:721:35
+    [1m[96m|[0m
+[1m[96m721[0m [1m[96m|[0m         ContextKind::SearchBox => search_box_extra_instructions(),
+    [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[96m...[0m
+[1m[96m814[0m [1m[96m|[0m fn terminal_extra_instructions(shell: &str) -> String {
+    [1m[96m|[0m [1m[96m-----------------------------------------------------[0m [1m[96msimilarly named function `terminal_extra_instructions` defined here[0m
+    [1m[96m|[0m
+[1m[96mhelp[0m: a function with a similar name exists
+    [1m[96m|[0m
+[1m[96m721[0m [91m- [0m        ContextKind::SearchBox => [91msearch_box_extra_instructions[0m(),
+[1m[96m721[0m [92m+ [0m        ContextKind::SearchBox => [92mterminal_extra_instructions[0m(),
+    [1m[96m|[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `terminal_context_prompt` in this scope[0m
+   [1m[96m--> [0msrc\model.rs:718:35
+    [1m[96m|[0m
+[1m[96m718[0m [1m[96m|[0m         ContextKind::CmdPrompt => terminal_context_prompt("cmd"),
+    [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `terminal_context_prompt` in this scope[0m
+   [1m[96m--> [0msrc\model.rs:719:36
+    [1m[96m|[0m
+[1m[96m719[0m [1m[96m|[0m         ContextKind::PowerShell => terminal_context_prompt("powershell"),
+    [1m[96m|[0m                                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[91merror[E0425][0m[1m[97m: cannot find function `browser_address_context_prompt` in this scope[0m
+   [1m[96m--> [0msrc\model.rs:720:43
+    [1m[96m|[0m
+[1m[96m720[0m [1m[96m|[0m         ContextKind::BrowserAddressBar => browser_address_context_prompt(),
+    [1m[96m|[0m                                           [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `search_box_extra_instructions` in this scope[0m
+   [1m[96m--> [0msrc\model.rs:721:35
+    [1m[96m|[0m
+[1m[96m721[0m [1m[96m|[0m         ContextKind::SearchBox => search_box_extra_instructions(),
+    [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[96m...[0m
+[1m[96m814[0m [1m[96m|[0m fn terminal_extra_instructions(shell: &str) -> String {
+    [1m[96m|[0m [1m[96m-----------------------------------------------------[0m [1m[96msimilarly named function `terminal_extra_instructions` defined here[0m
+    [1m[96m|[0m
+[1m[96mhelp[0m: a function with a similar name exists
+    [1m[96m|[0m
+[1m[96m721[0m [91m- [0m        ContextKind::SearchBox => [91msearch_box_extra_instructions[0m(),
+[1m[96m721[0m [92m+ [0m        ContextKind::SearchBox => [92mterminal_extra_instructions[0m(),
+    [1m[96m|[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 4 previous errors
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `context_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:716:4
+    [1m[96m|[0m
+[1m[96m716[0m [1m[96m|[0m fn context_extra_instructions(kind: ContextKind) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `terminal_context_prompt` is never used[0m
+   [1m[96m--> [0msrc\model.rs:904:4
+    [1m[96m|[0m
+[1m[96m904[0m [1m[96m|[0m fn terminal_context_prompt(shell: &str) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `browser_address_context_prompt` is never used[0m
+   [1m[96m--> [0msrc\model.rs:939:4
+    [1m[96m|[0m
+[1m[96m939[0m [1m[96m|[0m fn browser_address_context_prompt() -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `search_box_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:953:4
+    [1m[96m|[0m
+[1m[96m953[0m [1m[96m|[0m fn search_box_extra_instructions() -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find value `extra` in this scope[0m
+    [1m[96m--> [0msrc\model.rs:1186:17
+     [1m[96m|[0m
+[1m[96m1186[0m [1m[96m|[0m         extra = extra,
+     [1m[96m|[0m                 [1m[91m^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: unused variable: `extra`[0m
+    [1m[96m--> [0msrc\model.rs:1021:9
+     [1m[96m|[0m
+[1m[96m1021[0m [1m[96m|[0m     let extra = context_extra_instructions(detect_context_kind(context));
+     [1m[96m|[0m         [1m[93m^^^^^[0m [1m[93mhelp: if this is intentional, prefix it with an underscore: `_extra`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 1 warning
+[1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error; 1 warning emitted
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `terminal_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:814:4
+    [1m[96m|[0m
+[1m[96m814[0m [1m[96m|[0m fn terminal_extra_instructions(shell: &str) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `browser_address_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:870:4
+    [1m[96m|[0m
+[1m[96m870[0m [1m[96m|[0m fn browser_address_extra_instructions() -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 2 warnings
+[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 27.45s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `terminal_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:814:4
+    [1m[96m|[0m
+[1m[96m814[0m [1m[96m|[0m fn terminal_extra_instructions(shell: &str) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `browser_address_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:870:4
+    [1m[96m|[0m
+[1m[96m870[0m [1m[96m|[0m fn browser_address_extra_instructions() -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `terminal_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:814:4
+    [1m[96m|[0m
+[1m[96m814[0m [1m[96m|[0m fn terminal_extra_instructions(shell: &str) -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `browser_address_extra_instructions` is never used[0m
+   [1m[96m--> [0msrc\model.rs:870:4
+    [1m[96m|[0m
+[1m[96m870[0m [1m[96m|[0m fn browser_address_extra_instructions() -> String {
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 2 warnings
+[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 12.07s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 23.19s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `should_buffer_interpretation` is never used[0m
+    [1m[96m--> [0msrc\lib.rs:1396:4
+     [1m[96m|[0m
+[1m[96m1396[0m [1m[96m|[0m fn should_buffer_interpretation(transcript: &str, context: Option<&WindowContext>) -> bool {
+     [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m: `voice-keyboard` (lib) generated 1 warning
+[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 27.22s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 23.91s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\settings.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[93mwarning[0m[1m[97m: function `context_kind_label` is never used[0m
+   [1m[96m--> [0msrc\model.rs:733:8
+    [1m[96m|[0m
+[1m[96m733[0m [1m[96m|[0m pub fn context_kind_label(context: Option<&WindowContext>) -> &'static str {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0599][0m[1m[97m: no method named `log_detected_context` found for struct `Arc<AppCore>` in the current scope[0m
+   [1m[96m--> [0msrc\lib.rs:905:14
+    [1m[96m|[0m
+[1m[96m905[0m [1m[96m|[0m         self.log_detected_context(context.as_ref());
+    [1m[96m|[0m              [1m[91m^^^^^^^^^^^^^^^^^^^^[0m [1m[91mmethod not found in `Arc<AppCore>`[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0599`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0599][0m[1m[97m: no method named `log_detected_context` found for struct `Arc<AppCore>` in the current scope[0m
+   [1m[96m--> [0msrc\lib.rs:905:14
+    [1m[96m|[0m
+[1m[96m905[0m [1m[96m|[0m         self.log_detected_context(context.as_ref());
+    [1m[96m|[0m              [1m[91m^^^^^^^^^^^^^^^^^^^^[0m [1m[91mmethod not found in `Arc<AppCore>`[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `is_context_length_error` in this scope[0m
+    [1m[96m--> [0msrc\lib.rs:1115:20
+     [1m[96m|[0m
+[1m[96m1115[0m [1m[96m|[0m                 if is_context_length_error(&err) {
+     [1m[96m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mSome errors have detailed explanations: E0425, E0599.[0m
+[1m[97mFor more information about an error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 2 previous errors
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `is_context_length_error` in this scope[0m
+    [1m[96m--> [0msrc\lib.rs:1135:20
+     [1m[96m|[0m
+[1m[96m1135[0m [1m[96m|[0m                 if is_context_length_error(&err) {
+     [1m[96m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[E0425][0m[1m[97m: cannot find function `is_context_length_error` in this scope[0m
+    [1m[96m--> [0msrc\lib.rs:1135:20
+     [1m[96m|[0m
+[1m[96m1135[0m [1m[96m|[0m                 if is_context_length_error(&err) {
+     [1m[96m|[0m                    [1m[91m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91mnot found in this scope[0m
+
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[97mFor more information about this error, try `rustc --explain E0425`.[0m
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…                                                            [1m[91merror[0m: could not compile `voice-keyboard` (lib) due to 1 previous error
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\src\model.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 19.44s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 25.18s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…        Info File src-tauri\resources\portable-config\settings.json changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 441/444: voice-k…[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 34.08s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 27.50s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`
+        Info File src-tauri\src\lib.rs changed. Rebuilding application...
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+[1m[92m   Compiling[0m voice-keyboard v0.1.0 (G:\Ash\VoiceKeyboard\CppGemma\project-source\src-tauri)
+[1m[96m    Building[0m [=======================> ] 442/444: voice-k…[1m[96m    Building[0m [=======================> ] 443/444: voice-k…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 22.68s
+[1m[92m     Running[0m `target\debug\voice-keyboard.exe`

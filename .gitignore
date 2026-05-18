@@ -1,0 +1,31 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/resources/runtime/
+src-tauri/resources/models/
+src-tauri/resources/portable-config/
+*.tmp.wav
+voice-keyboard.settings.json
+logs/
+
+# Build artefacts and large local files
+VoiceKeyboard.exe
+*.gguf
+models/
+
+# Local profiling/benchmark artefacts
+llama-*.log
+llama-*.csv
+llama-*.json
+llama-*.stderr.log
+llama-*.stdout.log
+
+# Editor/OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local-only memory
+memory/
