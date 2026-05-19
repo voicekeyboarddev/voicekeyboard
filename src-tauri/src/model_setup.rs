@@ -484,7 +484,7 @@ fn recommendation(known: &KnownGemmaGguf, gpus: &[GpuDevice]) -> (bool, String) 
     }
 }
 
-fn preferred_gpus(gpus: &[GpuDevice]) -> Vec<&GpuDevice> {
+pub(crate) fn preferred_gpus(gpus: &[GpuDevice]) -> Vec<&GpuDevice> {
     let discrete = gpus
         .iter()
         .filter(|gpu| !is_integrated_gpu_name(&gpu.name))

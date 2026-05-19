@@ -1548,7 +1548,9 @@ fn select_llama_device(settings: &Settings) -> Option<String> {
     {
         return Some(configured.to_string());
     }
-    devices.first().map(|device| device.id.clone())
+    model_setup::preferred_gpus(&devices)
+        .first()
+        .map(|device| device.id.clone())
 }
 
 fn server_port(server_url: &str) -> String {
