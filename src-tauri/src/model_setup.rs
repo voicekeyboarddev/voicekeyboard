@@ -453,8 +453,9 @@ fn known_file(repo: &str, file: &str) -> Option<&'static KnownGemmaGguf> {
 }
 
 fn recommendation(known: &KnownGemmaGguf, gpus: &[GpuDevice]) -> (bool, String) {
-    let best_free = gpus.iter().filter_map(|g| g.memory_free_mb).max();
-    let best_total = gpus.iter().filter_map(|g| g.memory_total_mb).max();
+    let preferred = preferred_gpus(gpus);
+    let best_free = preferred.iter().filter_map(|g| g.memory_free_mb).max();
+    let best_total = preferred.iter().filter_map(|g| g.memory_total_mb).max();
     let available = best_free.or(best_total);
     match available {
         Some(vram) if vram >= known.min_vram_mb => {
@@ -481,6 +482,23 @@ fn recommendation(known: &KnownGemmaGguf, gpus: &[GpuDevice]) -> (bool, String) 
             ),
         ),
     }
+}
+
+fn preferred_gpus(gpus: &[GpuDevice]) -> Vec<&GpuDevice> {
+    let discrete = gpus
+        .iter()
+        .filter(|gpu| !is_integrated_gpu_name(&gpu.name))
+        .collect::<Vec<_>>();
+    if discrete.is_empty() {
+        gpus.iter().collect()
+    } else {
+        discrete
+    }
+}
+
+fn is_integrated_gpu_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("intel") || lower.contains("uhd graphics") || lower.contains("iris")
 }
 
 fn recommended_for_vram(vram_mb: u64, known: &KnownGemmaGguf) -> bool {

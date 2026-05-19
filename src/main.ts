@@ -800,19 +800,29 @@ function formatBytes(value?: number | null) {
 }
 
 function bestGpuMemoryMb(setup?: ModelSetupInfo | null) {
-  return setup?.gpu_devices
+  return preferredGpus(setup?.gpu_devices ?? [])
     .map((gpu) => gpu.memory_free_mb ?? gpu.memory_total_mb ?? 0)
-    .reduce((best, value) => Math.max(best, value), 0) ?? 0;
+    .reduce((best, value) => Math.max(best, value), 0);
 }
 
 function gpuSummary(setup?: ModelSetupInfo | null) {
-  const gpu = setup?.gpu_devices
+  const gpu = preferredGpus(setup?.gpu_devices ?? [])
     .slice()
     .sort((a, b) => (b.memory_total_mb ?? 0) - (a.memory_total_mb ?? 0))[0];
   if (!gpu) return "No GPU memory was detected. You can still choose an existing GGUF or download a model manually.";
   const memory = gpu.memory_free_mb ?? gpu.memory_total_mb;
   const memoryText = typeof memory === "number" ? `${formatMb(memory)} GPU memory detected` : "GPU detected";
   return `${esc(gpu.name)} - ${memoryText}`;
+}
+
+function preferredGpus(gpus: GpuDevice[]) {
+  const discrete = gpus.filter((gpu) => !isIntegratedGpu(gpu));
+  return discrete.length ? discrete : gpus;
+}
+
+function isIntegratedGpu(gpu: GpuDevice) {
+  const name = gpu.name.toLowerCase();
+  return name.includes("intel") || name.includes("uhd graphics") || name.includes("iris");
 }
 
 function modelChoiceList(setup: ModelSetupInfo | null) {
