@@ -99,6 +99,7 @@ You need Node.js LTS, Rust stable, and Visual Studio Build Tools with the
 git clone https://github.com/voicekeyboarddev/voicekeyboard.git
 cd voicekeyboard
 npm install
+npm run runtime:download  # stages bundled llama.cpp into src-tauri/resources/runtime
 npm run tauri:dev          # dev build with hot reload
 npm run tauri:build        # release installer (NSIS + MSI)
 ```

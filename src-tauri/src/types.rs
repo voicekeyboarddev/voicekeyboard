@@ -63,6 +63,13 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticLogFile {
+    pub name: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestLog {
     pub ts: String,
     pub stage: String,
@@ -127,6 +134,7 @@ pub struct StatusSnapshot {
     pub pending_confirmation: bool,
     pub pending_text: String,
     pub logs: Vec<LogEntry>,
+    pub log_files: Vec<DiagnosticLogFile>,
     pub request_logs: Vec<RequestLog>,
     pub model_inputs: Vec<ModelInputSnapshot>,
     pub recordings: Vec<RecordingEntry>,

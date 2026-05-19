@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
+    "runtime:download": "powershell -ExecutionPolicy Bypass -File scripts\\download-llama-runtime.ps1",
     "tauri": "tauri",
+    "pretauri:dev": "npm run runtime:download",
     "tauri:dev": "tauri dev",
+    "pretauri:build": "npm run runtime:download",
     "tauri:build": "tauri build"
   },
   "dependencies": {

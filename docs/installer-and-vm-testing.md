@@ -191,6 +191,7 @@ src-tauri\resources\runtime\ggml*.dll
 Rebuild with:
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File scripts\download-llama-runtime.ps1
 powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -CleanResources -NoModels
 ```
 

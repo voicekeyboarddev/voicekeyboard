@@ -228,9 +228,9 @@ let feedbackToast = "";
 let feedbackToastTimer: number | undefined;
 let modelSetup: ModelSetupInfo | null = null;
 let modelSetupLoading = false;
-let modelDownloadKey: string | null = null;
-let modelDownloadBusy = false;
+let downloadingModelKeys = new Set<string>();
 let downloadProgress: Record<string, ModelDownloadProgress> = {};
+let downloadProgressRenderTimer: number | undefined;
 let modelSetupDismissed = false;
 let audioInputDevices: AudioInputDevice[] = [];
 
@@ -340,11 +340,29 @@ function showFeedbackToast(msg: string) {
   render();
 }
 
+function captureScrollState() {
+  return {
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+    preserved: Array.from(document.querySelectorAll<HTMLElement>("[data-preserve-scroll]"))
+      .map((el) => el.scrollTop),
+  };
+}
+
+function restoreScrollState(state: ReturnType<typeof captureScrollState>) {
+  window.scrollTo(state.windowX, state.windowY);
+  document.querySelectorAll<HTMLElement>("[data-preserve-scroll]").forEach((el, index) => {
+    const top = state.preserved[index];
+    if (typeof top === "number") el.scrollTop = top;
+  });
+}
+
 function render() {
   if (isOverlay) {
     renderOverlay();
     return;
   }
+  const scrollState = captureScrollState();
   const s = snapshot;
   app.innerHTML = `
     <main class="shell">
@@ -370,6 +388,8 @@ function render() {
     </main>
   `;
   bind();
+  restoreScrollState(scrollState);
+  window.requestAnimationFrame(() => restoreScrollState(scrollState));
 }
 
 function renderOverlay() {
@@ -804,7 +824,7 @@ function modelChoiceList(setup: ModelSetupInfo | null) {
     const supported = gpuMb > 0 && candidate.min_vram_mb <= gpuMb;
     const key = modelKey(candidate);
     const progress = downloadProgress[key];
-    const isDownloading = modelDownloadKey === key && progress && !progress.done;
+    const isDownloading = downloadingModelKeys.has(key) || Boolean(progress && !progress.done);
     const progressText = progressTextFor(progress);
     return `
       <div class="model-choice ${supported ? "supported" : "unavailable"}">
@@ -813,15 +833,15 @@ function modelChoiceList(setup: ModelSetupInfo | null) {
             <strong>${esc(candidate.family)} ${esc(candidate.quant)}</strong>
             <span class="model-status ${supported ? "supported" : "unsupported"}">${supported ? "Supported" : "Probably not supported"}</span>
           </div>
-          <span>${esc(candidate.size_label || formatBytes(candidate.size_bytes))} download - needs ${formatMb(candidate.min_vram_mb)} GPU memory</span>
+          <span>${esc(candidate.size_label || formatBytes(candidate.size_bytes))} model + projector download - needs ${formatMb(candidate.min_vram_mb)} GPU memory</span>
           <small>${esc(candidate.repo)} / ${esc(candidate.file)}</small>
           ${progress ? `<div class="download-progress"><span style="width:${downloadPercent(progress)}%"></span></div><small>${esc(progressText)}</small>` : ""}
         </div>
         <button
           class="secondary"
           data-download-model="${index}"
-          ${modelDownloadKey && !isDownloading ? "disabled" : ""}
-        >${isDownloading ? "Downloading" : "Download"}</button>
+          ${isDownloading ? "disabled" : ""}
+        >${isDownloading ? "Downloading" : progress?.done ? "Downloaded" : "Download"}</button>
       </div>
     `;
   }).join("");
@@ -842,11 +862,41 @@ function downloadPercent(progress?: ModelDownloadProgress) {
 
 function progressTextFor(progress?: ModelDownloadProgress) {
   if (!progress) return "";
+  if (progress.phase === "already-present") return "Already downloaded";
   if (progress.done) return "Download complete";
   if (progress.total_bytes) {
     return `${formatBytes(progress.downloaded_bytes)} of ${formatBytes(progress.total_bytes)} downloaded`;
   }
   return progress.phase === "starting" ? "Starting download..." : `${formatBytes(progress.downloaded_bytes)} downloaded`;
+}
+
+function downloadProgressSummary() {
+  const entries = Object.values(downloadProgress)
+    .filter((progress) => downloadingModelKeys.has(progressKey(progress)) || !progress.done)
+    .sort((a, b) => progressKey(a).localeCompare(progressKey(b)));
+  if (!entries.length) return "";
+  return `
+    <div class="download-progress-summary">
+      ${entries.map((progress) => `
+        <div class="download-progress-row">
+          <div>
+            <strong>${esc(pathFileName(progress.file))}</strong>
+            <span>${esc(progressTextFor(progress))}</span>
+          </div>
+          <div class="download-progress"><span style="width:${downloadPercent(progress)}%"></span></div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function scheduleDownloadProgressRender() {
+  if (isEditingModelSetupField()) return;
+  if (downloadProgressRenderTimer !== undefined) return;
+  downloadProgressRenderTimer = window.setTimeout(() => {
+    downloadProgressRenderTimer = undefined;
+    if (!isEditingModelSetupField()) render();
+  }, 250);
 }
 
 function isEditingModelSetupField() {
@@ -957,7 +1007,8 @@ function downloadModelSection(setup: ModelSetupInfo | null) {
         <span>Hugging Face token (optional)</span>
         <input data-hf-token type="password" autocomplete="off" placeholder="hf_..." />
       </label>
-      <div class="model-scroll"><div class="model-choices">${modelChoiceList(setup)}</div></div>
+      ${downloadProgressSummary()}
+      <div class="model-scroll" data-preserve-scroll><div class="model-choices">${modelChoiceList(setup)}</div></div>
     </section>
   `;
 }
@@ -1118,7 +1169,7 @@ function modelSetupPopup(_s: Snapshot) {
   const s = snapshot ?? _s;
   return `
     <div class="model-setup-backdrop">
-      <section class="model-setup-popup">
+      <section class="model-setup-popup" data-preserve-scroll>
       <div class="setup-head">
         <div>
           <strong>Download a local AI model</strong>
@@ -1157,12 +1208,12 @@ function modelSetupView(s: Snapshot) {
           <div>
             <strong>${esc(candidate.family)} ${esc(candidate.quant)}</strong>
             <span>${esc(candidate.repo)} / ${esc(candidate.file)}</span>
-            <small>${formatBytes(candidate.size_bytes)} · ${esc(candidate.reason)}</small>
+            <small>${formatBytes(candidate.size_bytes)} + projector · ${esc(candidate.reason)}</small>
           </div>
           <button
             class="secondary"
             data-download-model="${index}"
-            ${modelDownloadBusy ? "disabled" : ""}
+            ${downloadingModelKeys.size > 0 ? "disabled" : ""}
           >Download</button>
         </div>
       `).join("")
@@ -1185,6 +1236,7 @@ function modelSetupView(s: Snapshot) {
         <span>Hugging Face token (optional)</span>
         <input data-hf-token type="password" autocomplete="off" placeholder="hf_..." />
       </label>
+      ${downloadProgressSummary()}
       <div class="model-choices">${candidates}</div>
     </div>
   `;
@@ -1361,15 +1413,15 @@ async function downloadModel(index: number) {
   const candidate = modelSetup?.candidates[index];
   if (!candidate) return;
   const ok = window.confirm(
-    `Download ${candidate.family} ${candidate.quant}?\n\nSize: ${candidate.size_label || formatBytes(candidate.size_bytes)}`
+    `Download ${candidate.family} ${candidate.quant}?\n\nThis downloads the model and its required projector/adaptor.\n\nModel size: ${candidate.size_label || formatBytes(candidate.size_bytes)}`
   );
   if (!ok) return;
   const hfToken = Array.from(document.querySelectorAll<HTMLInputElement>("[data-hf-token]"))
     .map((input) => input.value.trim())
     .find((value) => value.length > 0) || null;
-  modelDownloadKey = modelKey(candidate);
-  modelDownloadBusy = true;
-  downloadProgress[modelDownloadKey] = {
+  const key = modelKey(candidate);
+  downloadingModelKeys.add(key);
+  downloadProgress[key] = {
     repo: candidate.repo,
     file: candidate.file,
     downloaded_bytes: 0,
@@ -1389,8 +1441,7 @@ async function downloadModel(index: number) {
     console.error(error);
     alert(String(error));
   } finally {
-    modelDownloadKey = null;
-    modelDownloadBusy = false;
+    downloadingModelKeys.delete(key);
     render();
   }
 }
@@ -1503,8 +1554,20 @@ async function boot() {
     const progress = event.payload;
     const key = progressKey(progress);
     downloadProgress[key] = progress;
-    if (!progress.done) modelDownloadKey = key;
-    if (!isEditingModelSetupField()) render();
+    if (progress.done) {
+      downloadingModelKeys.delete(key);
+    } else {
+      downloadingModelKeys.add(key);
+    }
+    if (progress.done) {
+      if (downloadProgressRenderTimer !== undefined) {
+        window.clearTimeout(downloadProgressRenderTimer);
+        downloadProgressRenderTimer = undefined;
+      }
+      render();
+    } else {
+      scheduleDownloadProgressRender();
+    }
   });
 }
 

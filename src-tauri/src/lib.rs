@@ -21,8 +21,8 @@ use crate::{
     safety::SafetyTier,
     settings::Settings,
     types::{
-        Action, FocusedTextContext, ModelInputSnapshot, RecordingEntry, RequestLog, StatusSnapshot,
-        WindowContext,
+        Action, DiagnosticLogFile, FocusedTextContext, ModelInputSnapshot, RecordingEntry,
+        RequestLog, StatusSnapshot, WindowContext,
     },
 };
 use base64::{engine::general_purpose, Engine as _};
@@ -166,6 +166,7 @@ impl AppCore {
                 .map(|actions| text_from_actions(actions))
                 .unwrap_or_default(),
             logs: self.logger.recent(),
+            log_files: diagnostic_log_files(),
             request_logs: state.request_logs.iter().cloned().collect(),
             model_inputs: state.model_inputs.iter().cloned().collect(),
             recordings: state.recordings.iter().cloned().collect(),
@@ -1389,6 +1390,28 @@ impl AppCore {
             }
         }
     }
+}
+
+fn diagnostic_log_files() -> Vec<DiagnosticLogFile> {
+    let log_dir = settings::config_dir().join("logs");
+    ["audit.jsonl", "llama-server.log"]
+        .into_iter()
+        .filter_map(|name| {
+            let path = log_dir.join(name);
+            let content = read_log_tail(&path, 256 * 1024)?;
+            Some(DiagnosticLogFile {
+                name: name.to_string(),
+                path: path.to_string_lossy().to_string(),
+                content,
+            })
+        })
+        .collect()
+}
+
+fn read_log_tail(path: &std::path::Path, max_bytes: usize) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let start = bytes.len().saturating_sub(max_bytes);
+    Some(String::from_utf8_lossy(&bytes[start..]).to_string())
 }
 
 fn actions_after_streamed_text(actions: &[Action], streamed_text: &str) -> Vec<Action> {

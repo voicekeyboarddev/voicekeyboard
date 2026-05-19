@@ -7,7 +7,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +77,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         file: "gemma-4-E2B-it-Q4_K_M.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E2B",
         quant: "Q4_K_M",
         min_vram_mb: 4 * 1024,
@@ -86,7 +86,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         file: "gemma-4-E2B-it-Q5_K_M.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E2B",
         quant: "Q5_K_M",
         min_vram_mb: 5 * 1024,
@@ -95,7 +95,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         file: "gemma-4-E2B-it-Q6_K.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E2B",
         quant: "Q6_K",
         min_vram_mb: 6 * 1024,
@@ -104,7 +104,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         file: "gemma-4-E2B-it-Q8_0.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E2B",
         quant: "Q8_0",
         min_vram_mb: 8 * 1024,
@@ -113,7 +113,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         file: "gemma-4-E2B-it-BF16.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E2B",
         quant: "BF16",
         min_vram_mb: 12 * 1024,
@@ -122,7 +122,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         file: "gemma-4-E4B-it-Q4_K_M.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E4B",
         quant: "Q4_K_M",
         min_vram_mb: 6 * 1024,
@@ -131,7 +131,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         file: "gemma-4-E4B-it-Q5_K_M.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E4B",
         quant: "Q5_K_M",
         min_vram_mb: 8 * 1024,
@@ -140,7 +140,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         file: "gemma-4-E4B-it-Q6_K.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E4B",
         quant: "Q6_K",
         min_vram_mb: 10 * 1024,
@@ -149,7 +149,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         file: "gemma-4-E4B-it-Q8_0.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E4B",
         quant: "Q8_0",
         min_vram_mb: 14 * 1024,
@@ -158,7 +158,7 @@ const KNOWN_GEMMA_GGUFS: &[KnownGemmaGguf] = &[
     KnownGemmaGguf {
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         file: "gemma-4-E4B-it-BF16.gguf",
-        mmproj: "",
+        mmproj: "mmproj-BF16.gguf",
         family: "Gemma 4 E4B",
         quant: "BF16",
         min_vram_mb: 20 * 1024,
@@ -248,20 +248,21 @@ where
             .unwrap_or_else(|| std::ffi::OsStr::new("mmproj.gguf")),
     );
     if !mmproj_dest.exists() {
-        let _ = download_hf_file(
+        download_hf_file(
             repo,
             known.mmproj,
             &mmproj_dest,
             hf_token.as_deref(),
             &mut progress,
         )
-        .await;
+        .await
+        .with_context(|| format!("failed to download required projector/adaptor {}", known.mmproj))?;
     }
     if mmproj_dest.exists() {
         next.mmproj_path =
             settings::normalize_windows_extended_path(&mmproj_dest.to_string_lossy());
     } else {
-        next.mmproj_path = String::new();
+        anyhow::bail!("required projector/adaptor was not downloaded: {}", known.mmproj);
     }
     settings::save_settings(&next)?;
     Ok(next)
@@ -523,6 +524,19 @@ async fn download_hf_file(
     hf_token: Option<&str>,
     progress: &mut (impl FnMut(ModelDownloadProgress) + Send),
 ) -> anyhow::Result<()> {
+    if destination.exists() {
+        let downloaded_bytes = destination.metadata().ok().map(|meta| meta.len()).unwrap_or(0);
+        progress(ModelDownloadProgress {
+            repo: repo.to_string(),
+            file: file.to_string(),
+            downloaded_bytes,
+            total_bytes: Some(downloaded_bytes),
+            phase: "already-present".to_string(),
+            done: true,
+        });
+        return Ok(());
+    }
+
     let client = Client::builder()
         .timeout(Duration::from_secs(60 * 60))
         .build()?;
@@ -554,18 +568,22 @@ async fn download_hf_file(
     let mut file_out = tokio::fs::File::create(&tmp).await?;
     let mut stream = response.bytes_stream();
     let mut downloaded_bytes = 0u64;
+    let mut last_progress = Instant::now();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk?;
         downloaded_bytes += bytes.len() as u64;
         tokio::io::AsyncWriteExt::write_all(&mut file_out, &bytes).await?;
-        progress(ModelDownloadProgress {
-            repo: repo.to_string(),
-            file: file.to_string(),
-            downloaded_bytes,
-            total_bytes,
-            phase: "downloading".to_string(),
-            done: false,
-        });
+        if last_progress.elapsed() >= Duration::from_millis(250) {
+            progress(ModelDownloadProgress {
+                repo: repo.to_string(),
+                file: file.to_string(),
+                downloaded_bytes,
+                total_bytes,
+                phase: "downloading".to_string(),
+                done: false,
+            });
+            last_progress = Instant::now();
+        }
     }
     tokio::io::AsyncWriteExt::flush(&mut file_out).await?;
     drop(file_out);

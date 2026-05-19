@@ -306,7 +306,13 @@ impl ModelClient {
         timeout(Duration::from_secs(60), self.chat(settings, body))
             .await
             .map_err(|_| anyhow!("model warm-up request timed out"))?
-            .context("model warm-up request failed")?;
+            .map_err(|err| {
+                if let Some(tail) = recent_server_log_tail() {
+                    anyhow!("model warm-up request failed: {err:#}\n\nRecent llama-server.log:\n{tail}")
+                } else {
+                    anyhow!("model warm-up request failed: {err:#}")
+                }
+            })?;
         *self.inner.warmed.lock() = true;
         Ok(())
     }
@@ -1572,7 +1578,7 @@ fn open_server_log() -> anyhow::Result<std::fs::File> {
         .with_context(|| format!("failed to open {}", path.display()))
 }
 
-fn recent_server_log_tail() -> Option<String> {
+pub(crate) fn recent_server_log_tail() -> Option<String> {
     let text = std::fs::read_to_string(server_log_path()).ok()?;
     let tail = text
         .lines()

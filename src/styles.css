@@ -387,6 +387,31 @@ h2 {
   transition: width 160ms ease;
 }
 
+.download-progress-summary {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #b8cfe3;
+  border-radius: 6px;
+  background: #f1f7fc;
+}
+
+.download-progress-row {
+  display: grid;
+  gap: 5px;
+}
+
+.download-progress-row strong,
+.download-progress-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.download-progress-row span {
+  color: #5d6875;
+  font-size: 12px;
+}
+
 .local-models {
   display: grid;
   gap: 8px;

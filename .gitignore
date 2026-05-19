@@ -21,6 +21,7 @@ logs/
 models/
 
 # Local profiling / benchmark artefacts
+.runtime-download/
 llama-*.log
 llama-*.csv
 llama-*.json

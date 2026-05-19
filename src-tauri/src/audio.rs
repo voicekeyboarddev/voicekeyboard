@@ -122,10 +122,13 @@ impl AudioManager {
         thread::Builder::new()
             .name("voice-keyboard-audio".to_string())
             .spawn(move || {
+                let init_error_tx = init_tx.clone();
                 let result =
                     run_audio_thread(buffer, status.clone(), stop_rx, init_tx, device_name);
                 if let Err(err) = result {
-                    *status.lock() = format!("audio stopped: {err}");
+                    let message = format!("audio stopped: {err:#}");
+                    *status.lock() = message.clone();
+                    let _ = init_error_tx.send(Err(message));
                 }
             })?;
 

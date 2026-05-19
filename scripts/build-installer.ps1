@@ -1,5 +1,5 @@
 param(
-    [string]$RuntimeDir = "portable-export\VoiceKeyboard-portable-20260507\runtime",
+    [string]$RuntimeDir = "src-tauri\resources\runtime",
     [string[]]$ModelFiles = @(),
     [string[]]$ModelDirs = @(),
     [string]$HfRepo = "",
@@ -197,7 +197,19 @@ if ($CleanResources) {
     Remove-DirectorySafely (Join-Path $ResourcesDir "portable-config")
 }
 
-Copy-BackendRuntime $RuntimeSource $RuntimeOut
+if (-not (Test-Path -LiteralPath (Join-Path $RuntimeSource "llama-server.exe"))) {
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "download-llama-runtime.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to stage llama.cpp runtime"
+    }
+}
+
+$RuntimeSource = Resolve-RepoPath $RuntimeDir
+if ([System.IO.Path]::GetFullPath($RuntimeSource) -ne [System.IO.Path]::GetFullPath($RuntimeOut)) {
+    Copy-BackendRuntime $RuntimeSource $RuntimeOut
+} elseif (-not (Test-Path -LiteralPath (Join-Path $RuntimeOut "llama-server.exe"))) {
+    throw "llama-server.exe was not found in staged runtime: $RuntimeOut"
+}
 
 if (-not $NoModels) {
     New-Item -ItemType Directory -Force -Path $ModelsOut | Out-Null
