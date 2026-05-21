@@ -33,6 +33,8 @@ pub struct Settings {
     pub llama_device: String,
     pub model_path: String,
     pub mmproj_path: String,
+    pub model_download_dir: String,
+    pub always_send_low_res_image: bool,
     pub image_width: u32,
     pub image_height: u32,
     pub image_tokens: u32,
@@ -78,6 +80,8 @@ impl Default for Settings {
             llama_device: "Vulkan0".to_string(),
             model_path: r"models\gemma-4-E4B-it-Q4_K_M\gemma-4-E4B-it.Q4_K_M.gguf".to_string(),
             mmproj_path: r"models\gemma-4-E4B-it-Q2\gemma-4-E4B-it.mmproj-Q8_0.gguf".to_string(),
+            model_download_dir: String::new(),
+            always_send_low_res_image: false,
             image_width: 160,
             image_height: 100,
             image_tokens: 70,
@@ -127,8 +131,27 @@ fn bundled_resource_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-pub fn models_dir() -> PathBuf {
+pub fn default_models_dir() -> PathBuf {
     config_dir().join("models")
+}
+
+pub fn models_dir(settings: &Settings) -> PathBuf {
+    let trimmed = settings.model_download_dir.trim();
+    if trimmed.is_empty() {
+        default_models_dir()
+    } else {
+        PathBuf::from(trimmed)
+    }
+}
+
+pub const GEMMA4_IMAGE_TOKEN_BUDGETS: &[u32] = &[70, 140, 280, 560, 1120];
+
+pub fn valid_image_tokens(tokens: u32) -> u32 {
+    GEMMA4_IMAGE_TOKEN_BUDGETS
+        .iter()
+        .copied()
+        .min_by_key(|valid| valid.abs_diff(tokens))
+        .unwrap_or(280)
 }
 
 pub fn runtime_dir() -> PathBuf {
@@ -254,22 +277,48 @@ fn resolve_settings_paths(mut settings: Settings) -> Settings {
         normalize_windows_extended_path(&resolve_runtime_path(&settings.model_path));
     settings.mmproj_path =
         normalize_windows_extended_path(&resolve_runtime_path(&settings.mmproj_path));
+    settings.model_download_dir =
+        normalize_windows_extended_path(settings.model_download_dir.trim());
+    settings.image_tokens = valid_image_tokens(settings.image_tokens);
+    restore_lightweight_image_defaults(&mut settings);
     settings.recent_model_paths = settings
         .recent_model_paths
         .into_iter()
         .map(|path| normalize_windows_extended_path(&path))
         .collect();
     if settings.model_path.trim().is_empty() || !PathBuf::from(&settings.model_path).exists() {
-        if let Some(model) = find_model_file(false) {
+        if let Some(model) = find_model_file(&settings, false) {
             settings.model_path = model.to_string_lossy().to_string();
         }
     }
     if settings.mmproj_path.trim().is_empty() || !PathBuf::from(&settings.mmproj_path).exists() {
-        if let Some(mmproj) = find_model_file(true) {
+        if let Some(mmproj) = find_model_file(&settings, true) {
             settings.mmproj_path = mmproj.to_string_lossy().to_string();
         }
     }
     settings
+}
+
+fn restore_lightweight_image_defaults(settings: &mut Settings) {
+    if settings.always_send_low_res_image {
+        return;
+    }
+    let auto_tuned_values = [
+        (512, 384, 70),
+        (768, 512, 140),
+        (960, 720, 280),
+        (1280, 1024, 560),
+        (1600, 1600, 1120),
+    ];
+    if auto_tuned_values.iter().any(|&(width, height, tokens)| {
+        settings.image_width == width
+            && settings.image_height == height
+            && settings.image_tokens == tokens
+    }) {
+        settings.image_width = 160;
+        settings.image_height = 100;
+        settings.image_tokens = 70;
+    }
 }
 
 pub fn normalize_windows_extended_path(path: &str) -> String {
@@ -299,8 +348,8 @@ fn resolve_llama_server_path(path: &str) -> String {
     }
 }
 
-fn find_model_file(mmproj: bool) -> Option<PathBuf> {
-    let mut roots = vec![models_dir()];
+fn find_model_file(settings: &Settings, mmproj: bool) -> Option<PathBuf> {
+    let mut roots = vec![models_dir(settings), default_models_dir()];
     for base in bundled_resource_dirs() {
         roots.push(base.join("models"));
     }
@@ -358,6 +407,9 @@ pub fn save_settings(settings: &Settings) -> anyhow::Result<()> {
     let mut settings = settings.clone();
     settings.model_path = normalize_windows_extended_path(&settings.model_path);
     settings.mmproj_path = normalize_windows_extended_path(&settings.mmproj_path);
+    settings.model_download_dir =
+        normalize_windows_extended_path(settings.model_download_dir.trim());
+    settings.image_tokens = valid_image_tokens(settings.image_tokens);
     settings.recent_model_paths = settings
         .recent_model_paths
         .into_iter()

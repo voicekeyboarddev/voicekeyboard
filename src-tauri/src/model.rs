@@ -35,6 +35,8 @@ pub struct StreamingInterpretation {
     pub response: ModelResponse,
     pub streamed_text: String,
     pub used_fallback_prompt: bool,
+    pub image_attached: bool,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone)]
@@ -195,9 +197,9 @@ impl ModelClient {
                 .arg("--reasoning")
                 .arg("off")
                 .arg("--image-min-tokens")
-                .arg(settings.image_tokens.clamp(16, 1024).to_string())
+                .arg(settings::valid_image_tokens(settings.image_tokens).to_string())
                 .arg("--image-max-tokens")
-                .arg(settings.image_tokens.clamp(16, 1024).to_string())
+                .arg(settings::valid_image_tokens(settings.image_tokens).to_string())
                 .arg("--metrics")
                 .arg("--no-webui")
                 .stdout(Stdio::from(server_log))
@@ -393,7 +395,8 @@ impl ModelClient {
         self.ensure_running(settings).await?;
         *self.inner.status.lock() = mode.stage_name().to_string();
         let mut used_fallback_prompt = false;
-        let body = self.interpret_body(settings, transcript, context, false, recent_context, mode);
+        let (body, mut image_attached, mut prompt) =
+            self.interpret_body(settings, transcript, context, false, recent_context, mode);
         let mut interpreted = match self
             .chat_with_streaming_text(settings, body, &mut on_text, StreamParseMode::PlainText)
             .await
@@ -403,9 +406,11 @@ impl ModelClient {
                 if is_context_length_error_text(&primary_err.to_string()) {
                     return Err(primary_err);
                 }
-                let fallback_body =
+                let (fallback_body, fallback_image_attached, fallback_prompt) =
                     self.interpret_fallback_body(settings, transcript, context, false, mode);
                 used_fallback_prompt = true;
+                image_attached = fallback_image_attached;
+                prompt = fallback_prompt;
                 self.chat_with_streaming_text(
                     settings,
                     fallback_body,
@@ -423,11 +428,13 @@ impl ModelClient {
         if response_needs_image(&interpreted.response.content)
             && context.and_then(|c| c.cursor_screenshot.as_ref()).is_some()
         {
-            let body = if used_fallback_prompt {
+            let (body, retry_image_attached, retry_prompt) = if used_fallback_prompt {
                 self.interpret_fallback_body(settings, transcript, context, true, mode)
             } else {
                 self.interpret_body(settings, transcript, context, true, recent_context, mode)
             };
+            image_attached = retry_image_attached;
+            prompt = retry_prompt;
             interpreted = self
                 .chat_with_streaming_text(settings, body, &mut on_text, StreamParseMode::PlainText)
                 .await?;
@@ -435,6 +442,8 @@ impl ModelClient {
         *self.inner.status.lock() = "warm".to_string();
         Ok(StreamingInterpretation {
             used_fallback_prompt,
+            image_attached,
+            prompt,
             ..interpreted
         })
     }
@@ -446,10 +455,8 @@ impl ModelClient {
         context: Option<&WindowContext>,
         force_image: bool,
         mode: InterpretationMode,
-    ) -> serde_json::Value {
-        let image_attached = context
-            .map(|c| force_image || c.focused_text.is_none())
-            .unwrap_or(false);
+    ) -> (serde_json::Value, bool, String) {
+        let image_attached = should_attach_image(settings, context, force_image);
         let prompt = match mode {
             InterpretationMode::Fast => legacy_interpretation_prompt(
                 transcript,
@@ -481,7 +488,7 @@ impl ModelClient {
                 }));
             }
         }
-        json!({
+        let body = json!({
             "model": "local",
             "stream": true,
             "temperature": 0,
@@ -489,7 +496,8 @@ impl ModelClient {
                 "role": "user",
                 "content": content
             }]
-        })
+        });
+        (body, image_attached, prompt)
     }
 
     fn interpret_body(
@@ -500,10 +508,8 @@ impl ModelClient {
         force_image: bool,
         recent_context: &[RecentTextContext],
         mode: InterpretationMode,
-    ) -> serde_json::Value {
-        let image_attached = context
-            .map(|c| force_image || c.focused_text.is_none())
-            .unwrap_or(false);
+    ) -> (serde_json::Value, bool, String) {
+        let image_attached = should_attach_image(settings, context, force_image);
         let prompt = match mode {
             InterpretationMode::Fast => interpretation_prompt(
                 transcript,
@@ -537,7 +543,7 @@ impl ModelClient {
             }
         }
 
-        json!({
+        let body = json!({
             "model": "local",
             "stream": true,
             "temperature": 0,
@@ -551,7 +557,8 @@ impl ModelClient {
             if mode == InterpretationMode::Thinking {
                 body["reasoning_budget"] = json!(settings.thinking_handoff_reasoning_budget);
             }
-        })
+        });
+        (body, image_attached, prompt)
     }
 
     async fn chat(
@@ -675,8 +682,23 @@ impl ModelClient {
             },
             streamed_text,
             used_fallback_prompt: false,
+            image_attached: false,
+            prompt: String::new(),
         })
     }
+}
+
+fn should_attach_image(
+    settings: &Settings,
+    context: Option<&WindowContext>,
+    force_image: bool,
+) -> bool {
+    context
+        .map(|c| {
+            c.cursor_screenshot.is_some()
+                && (force_image || settings.always_send_low_res_image || c.focused_text.is_none())
+        })
+        .unwrap_or(false)
 }
 
 fn is_context_length_error_text(text: &str) -> bool {
@@ -1548,9 +1570,7 @@ fn select_llama_device(settings: &Settings) -> Option<String> {
     {
         return Some(configured.to_string());
     }
-    model_setup::preferred_gpus(&devices)
-        .first()
-        .map(|device| device.id.clone())
+    devices.first().map(|device| device.id.clone())
 }
 
 fn server_port(server_url: &str) -> String {
@@ -1747,7 +1767,7 @@ fn format_window_context(context: Option<&WindowContext>, image_attached: bool) 
                 .map(|image| {
                     if image_attached {
                         format!(
-                        "\nAttached image: {}x{} screenshot centered near the cursor. The red marker shows the cursor/insertion area in the target app.",
+                        "\nAttached image: {}x{} screenshot from the target app near the cursor. The red marker shows the cursor/insertion area.",
                         image.width, image.height
                         )
                     } else {

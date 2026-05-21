@@ -146,9 +146,14 @@ function Write-BundledSettings([string]$RuntimeOut, [string]$ModelsOut) {
         managed_server = $true
         server_url = "http://127.0.0.1:8099"
         llama_server_path = "runtime\llama-server.exe"
-        llama_device = ""
+        llama_device = "Vulkan0"
         model_path = if ($model) { Get-RelativeResourcePath $model.FullName } else { "models\model.gguf" }
         mmproj_path = if ($mmproj) { Get-RelativeResourcePath $mmproj.FullName } else { "" }
+        model_download_dir = ""
+        always_send_low_res_image = $false
+        image_width = 160
+        image_height = 100
+        image_tokens = 70
         context_length_tokens = 4096
         log_retention_bytes = 5242880
         common_terms = ""

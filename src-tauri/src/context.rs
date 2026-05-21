@@ -5,6 +5,8 @@ use crate::{
 
 const MIN_SCREENSHOT_SIDE: u32 = 64;
 const MAX_SCREENSHOT_SIDE: u32 = 768;
+const ALWAYS_SEND_IMAGE_MAX_WIDTH: u32 = 640;
+const ALWAYS_SEND_IMAGE_MAX_HEIGHT: u32 = 480;
 
 #[derive(Debug, Clone, Copy)]
 struct ScreenshotConfig {
@@ -14,13 +16,19 @@ struct ScreenshotConfig {
 
 impl ScreenshotConfig {
     fn from_settings(settings: &Settings) -> Self {
+        let max_width = if settings.always_send_low_res_image {
+            ALWAYS_SEND_IMAGE_MAX_WIDTH
+        } else {
+            MAX_SCREENSHOT_SIDE
+        };
+        let max_height = if settings.always_send_low_res_image {
+            ALWAYS_SEND_IMAGE_MAX_HEIGHT
+        } else {
+            MAX_SCREENSHOT_SIDE
+        };
         Self {
-            width: settings
-                .image_width
-                .clamp(MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE),
-            height: settings
-                .image_height
-                .clamp(MIN_SCREENSHOT_SIDE, MAX_SCREENSHOT_SIDE),
+            width: settings.image_width.clamp(MIN_SCREENSHOT_SIDE, max_width),
+            height: settings.image_height.clamp(MIN_SCREENSHOT_SIDE, max_height),
         }
     }
 }
@@ -1109,3 +1117,4 @@ fn set_pixel(rgba: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u
     let index = ((y as u32 * width + x as u32) * 4) as usize;
     rgba[index..index + 4].copy_from_slice(&color);
 }
+

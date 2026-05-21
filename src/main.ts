@@ -30,6 +30,8 @@ type Settings = {
   llama_device: string;
   model_path: string;
   mmproj_path: string;
+  model_download_dir: string;
+  always_send_low_res_image: boolean;
   image_width: number;
   image_height: number;
   image_tokens: number;
@@ -138,6 +140,7 @@ type Snapshot = {
     stage: string;
     endpoint: string;
     prompt: string;
+    image_attached: boolean;
     reasoning_mode?: string | null;
     reasoning_budget?: number | null;
     context?: Snapshot["current_window"];
@@ -555,7 +558,7 @@ function mainView(s: Snapshot) {
           ${win?.cursor_screenshot ? `
             <div class="cursor-context">
               <b>Cursor context screenshot</b>
-              <small>Red marker: cursor area inside the captured app context</small>
+              <small>Exact marked image sent to the model</small>
               <img
                 alt="Cursor-centered context screenshot"
                 width="${win.cursor_screenshot.width}"
@@ -768,7 +771,7 @@ function modelInputs(s: Snapshot) {
               <pre class="selectable">${esc(JSON.stringify(stripBase64(input.context), null, 2))}</pre>
             </details>
           ` : ""}
-          ${input.context?.cursor_screenshot ? `
+          ${input.image_attached && input.context?.cursor_screenshot ? `
             <label>Image sent to model</label>
             <img
               class="model-input-image"
@@ -777,7 +780,7 @@ function modelInputs(s: Snapshot) {
               height="${input.context.cursor_screenshot.height}"
               src="data:image/png;base64,${input.context.cursor_screenshot.png_base64}"
             />
-          ` : ""}
+          ` : input.context?.cursor_screenshot ? `<div class="muted" style="font-size:12px;padding:4px 0">Image captured but not sent to the model for this request</div>` : ""}
         </details>
       `).join("")}
     </div>
@@ -911,7 +914,7 @@ function scheduleDownloadProgressRender() {
 
 function isEditingModelSetupField() {
   const active = document.activeElement;
-  return active instanceof HTMLElement && active.matches("[data-manual-model-path], [data-hf-token]");
+  return active instanceof HTMLElement && active.matches("[data-manual-model-path], [data-hf-token], [data-setting='model_download_dir']");
 }
 
 function localModelList(setup: ModelSetupInfo | null) {
@@ -962,8 +965,63 @@ function displayPath(path: string) {
 
 function settingDisplayValue(settings: Settings, key: keyof Settings) {
   const value = settings[key];
-  if (typeof value === "string" && String(key).endsWith("_path")) return displayPath(value);
+  if (typeof value === "string" && (String(key).endsWith("_path") || key === "model_download_dir")) return displayPath(value);
   return String(value);
+}
+
+function modelDownloadFolderSection(s: Snapshot, setup: ModelSetupInfo | null) {
+  const saved = s.settings.model_download_dir.trim();
+  const active = saved || setup?.models_dir || "";
+  return `
+    <section class="model-setup-section">
+      <div class="model-section-head">
+        <div>
+          <strong>Download folder</strong>
+          <span>${esc(displayPath(active))}</span>
+        </div>
+        <button class="secondary" data-cmd="open-models-folder">Open folder</button>
+      </div>
+      <label class="field">
+        <span>Model download folder</span>
+        <input data-setting="model_download_dir" type="text" value="${esc(displayPath(active))}" />
+      </label>
+      <button class="secondary" data-cmd="save-settings">Save settings</button>
+    </section>
+  `;
+}
+
+function imageDetailSection(s: Snapshot) {
+  const tokenOptions = [70, 140, 280, 560, 1120]
+    .map((tokens) => `<option value="${tokens}" ${s.settings.image_tokens === tokens ? "selected" : ""}>${tokens}</option>`)
+    .join("");
+  return `
+    <section class="model-setup-section">
+      <div class="model-section-head">
+        <div>
+          <strong>Image detail</strong>
+          <span>Manual capture and token budget</span>
+        </div>
+      </div>
+      <label class="toggle">
+        <input data-setting="always_send_low_res_image" type="checkbox" ${s.settings.always_send_low_res_image ? "checked" : ""} />
+        <span>Always send lower-res marked image</span>
+      </label>
+      <div class="settings-grid">
+        <label class="field">
+          <span>Image width px</span>
+          <input data-setting="image_width" type="number" step="1" value="${esc(settingDisplayValue(s.settings, "image_width"))}" />
+        </label>
+        <label class="field">
+          <span>Image height px</span>
+          <input data-setting="image_height" type="number" step="1" value="${esc(settingDisplayValue(s.settings, "image_height"))}" />
+        </label>
+        <label class="field">
+          <span>Gemma 4 image tokens</span>
+          <select data-setting="image_tokens">${tokenOptions}</select>
+        </label>
+      </div>
+    </section>
+  `;
 }
 
 function currentModelSection(s: Snapshot, setup: ModelSetupInfo | null) {
@@ -1043,9 +1101,6 @@ function settingsView(s: Snapshot) {
     ["pre_roll_ms", "Audio pre-roll ms", "number"],
     ["rolling_history_seconds", "Rolling history seconds", "number"],
     ["vad_rms_threshold", "VAD RMS threshold", "number"],
-    ["image_width", "Image width px", "number"],
-    ["image_height", "Image height px", "number"],
-    ["image_tokens", "Image token budget", "number"],
     ["context_length_tokens", "Model context tokens", "number"],
     ["confirm_large_text_chars", "Confirm text length", "number"],
     ["injection_delay_ms", "Injection delay ms", "number"],
@@ -1082,6 +1137,7 @@ function settingsView(s: Snapshot) {
       <h2>Settings</h2>
       ${modelSetupPanel(s)}
       ${audioInputSection(s)}
+      ${imageDetailSection(s)}
       <div class="settings-grid">
         ${fields
           .map(([key, label, type]) => `
@@ -1168,6 +1224,7 @@ function modelSetupPanel(s: Snapshot) {
         </button>
       </div>
       ${currentModelSection(s, setup)}
+      ${modelDownloadFolderSection(s, setup)}
       ${existingModelSection(setup)}
       ${downloadModelSection(setup)}
     </div>
@@ -1194,6 +1251,7 @@ function modelSetupPopup(_s: Snapshot) {
       </div>
         ${setup?.cpu_only_warning ? `<div class="setup-warning">${esc(setup.cpu_only_warning)}</div>` : ""}
         ${currentModelSection(s, setup)}
+        ${modelDownloadFolderSection(s, setup)}
         ${existingModelSection(setup)}
         ${downloadModelSection(setup)}
       </section>
@@ -1241,6 +1299,7 @@ function modelSetupView(s: Snapshot) {
         </button>
       </div>
       ${currentModelSection(s, setup)}
+      ${modelDownloadFolderSection(s, setup)}
       ${localModelList(setup)}
       <label class="field">
         <span>Hugging Face token (optional)</span>
@@ -1494,7 +1553,7 @@ function collectSettings(base: Settings): Settings {
     const key = input.dataset.setting as keyof Settings;
     const old = next[key];
     const rawValue =
-      typeof old === "string" && String(key).endsWith("_path")
+      typeof old === "string" && (String(key).endsWith("_path") || key === "model_download_dir")
         ? displayPath(input.value)
         : input.value;
     const value =

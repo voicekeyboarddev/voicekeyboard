@@ -1,4 +1,4 @@
-mod audio;
+﻿mod audio;
 mod clipboard;
 mod context;
 mod gesture;
@@ -715,85 +715,29 @@ impl AppCore {
                     let button = session.button;
                     drop(gesture);
                     core.set_status("listening");
-                    core.update_overlay("recording", None);
-
-                    // Try to capture selected text via clipboard while the user is still
-                    // holding down — many apps preserve the selection during a static
-                    // mouse-down on the selection itself, even though UIA may not expose
-                    // it on the keyboard-focused element. We Ctrl+C, read the clipboard,
-                    // and put the original clipboard back. Best-effort; runs in the
-                    // background so it doesn't delay recording.
+                    // Keep the target app focused while the mouse is down. In terminals,
+                    // showing an overlay can cancel drag selection.
                     let clipboard_core = Arc::clone(&core);
                     std::thread::spawn(move || {
-                        let Some(captured) = clipboard::capture_selection_via_clipboard() else {
-                            return;
-                        };
-                        let trimmed = captured.trim().to_string();
-                        if trimmed.is_empty() {
-                            return;
-                        }
-                        let mut gesture = clipboard_core.gesture.lock();
-                        let Some(session) = gesture.as_mut() else {
-                            return;
-                        };
-                        if session.start != start {
-                            return; // gesture changed/ended already
-                        }
-                        let mut ctx = session.context.clone().unwrap_or_else(|| WindowContext {
-                            title: String::new(),
-                            app_name: String::new(),
-                            cursor_x: 0,
-                            cursor_y: 0,
-                            focused_text: None,
-                            cursor_screenshot: None,
-                        });
-                        let mut ft =
-                            ctx.focused_text
-                                .clone()
-                                .unwrap_or_else(|| FocusedTextContext {
-                                    source: "clipboard probe".to_string(),
-                                    element_name: None,
-                                    control_type: None,
-                                    class_name: None,
-                                    automation_id: None,
-                                    parent_name: None,
-                                    parent_class: None,
-                                    parent_control_type: None,
-                                    text_before_cursor: None,
-                                    selected_text: None,
-                                    text_after_cursor: None,
-                                    full_text: None,
-                                    truncated: false,
-                                    cursor_known: false,
-                                    element_bounds: None,
-                                });
-                        // Merge: keep UIA-derived selection if present and non-empty,
-                        // otherwise fill it from clipboard. Always also stash the clipboard
-                        // copy under full_text so the model still has access to it.
-                        let already_has_selection = ft
-                            .selected_text
+                        let skip_clipboard_probe = clipboard_core
+                            .gesture
+                            .lock()
                             .as_ref()
-                            .map(|s| !s.is_empty())
-                            .unwrap_or(false);
-                        if !already_has_selection {
-                            ft.selected_text = Some(trimmed.clone());
-                            ft.source = if ft.source == "clipboard probe" {
-                                "clipboard probe".to_string()
-                            } else {
-                                format!("{} + clipboard", ft.source)
-                            };
+                            .and_then(|session| {
+                                (session.start == start)
+                                    .then(|| terminal_context_kind(session.context.as_ref()))
+                            })
+                            .flatten()
+                            .is_some();
+                        if skip_clipboard_probe {
+                            clipboard_core.log(
+                                "debug",
+                                "skipped clipboard selection probe in terminal context",
+                            );
+                            return;
                         }
-                        ctx.focused_text = Some(ft);
-                        session.context = Some(ctx);
-                        clipboard_core.log(
-                            "info",
-                            format!(
-                                "captured {} chars of selected text via clipboard probe",
-                                trimmed.chars().count()
-                            ),
-                        );
+                        capture_selection_with_clipboard_probe(&clipboard_core, start);
                     });
-
                     let watchdog = Arc::clone(&core);
                     std::thread::spawn(move || {
                         std::thread::sleep(MAX_RECORDING_DURATION);
@@ -941,6 +885,7 @@ impl AppCore {
                 settings.server_url.trim_end_matches('/')
             ),
             prompt: model::transcription_prompt(context.as_ref(), &settings.spoken_languages),
+            image_attached: false,
             reasoning_mode: Some("off".to_string()),
             reasoning_budget: None,
             context: context.clone(),
@@ -1064,6 +1009,7 @@ impl AppCore {
         } else {
             None
         };
+        let model_was_called = direct_override.is_none();
         let interpreted_result = if let Some(output) = direct_override {
             self.log(
                 "info",
@@ -1081,31 +1027,10 @@ impl AppCore {
                 },
                 streamed_text: String::new(),
                 used_fallback_prompt: false,
+                image_attached: false,
+                prompt: String::new(),
             })
         } else {
-            self.push_model_input(ModelInputSnapshot {
-                ts: Utc::now().to_rfc3339(),
-                stage: interpretation_mode.stage_name().to_string(),
-                endpoint: format!(
-                    "{}/v1/chat/completions",
-                    settings.server_url.trim_end_matches('/')
-                ),
-                prompt: interpretation_prompt,
-                reasoning_mode: Some(if interpretation_mode == InterpretationMode::Thinking {
-                    "on".to_string()
-                } else {
-                    "off".to_string()
-                }),
-                reasoning_budget: if interpretation_mode == InterpretationMode::Thinking {
-                    Some(settings.thinking_handoff_reasoning_budget)
-                } else {
-                    None
-                },
-                context: context.clone(),
-                audio_path: None,
-                audio_duration_ms: None,
-                audio_format: None,
-            });
             self.model
                 .interpret_streaming_text(
                     &settings,
@@ -1128,6 +1053,38 @@ impl AppCore {
                 )
                 .await
         };
+        if model_was_called {
+            if let Ok(interpreted) = interpreted_result.as_ref() {
+            self.push_model_input(ModelInputSnapshot {
+                ts: Utc::now().to_rfc3339(),
+                stage: interpretation_mode.stage_name().to_string(),
+                endpoint: format!(
+                    "{}/v1/chat/completions",
+                    settings.server_url.trim_end_matches('/')
+                ),
+                prompt: if interpreted.prompt.is_empty() {
+                    interpretation_prompt
+                } else {
+                    interpreted.prompt.clone()
+                },
+                image_attached: interpreted.image_attached,
+                reasoning_mode: Some(if interpretation_mode == InterpretationMode::Thinking {
+                    "on".to_string()
+                } else {
+                    "off".to_string()
+                }),
+                reasoning_budget: if interpretation_mode == InterpretationMode::Thinking {
+                    Some(settings.thinking_handoff_reasoning_budget)
+                } else {
+                    None
+                },
+                context: context.clone(),
+                audio_path: None,
+                audio_duration_ms: None,
+                audio_format: None,
+            });
+            }
+        }
         let (interpreted_result, interpretation_ok) = match interpreted_result {
             Ok(result) => {
                 if result.used_fallback_prompt {
@@ -1177,6 +1134,8 @@ impl AppCore {
                         },
                         streamed_text: String::new(),
                         used_fallback_prompt: false,
+                        image_attached: false,
+                        prompt: String::new(),
                     },
                     false,
                 )
@@ -1488,6 +1447,70 @@ fn preserved_selection_context(context: Option<&WindowContext>) -> Option<Focuse
                 .unwrap_or(false)
         })
         .cloned()
+}
+
+fn capture_selection_with_clipboard_probe(core: &Arc<AppCore>, start: Instant) {
+    let Some(captured) = clipboard::capture_selection_via_clipboard() else {
+        return;
+    };
+    let trimmed = captured.trim().to_string();
+    if trimmed.is_empty() {
+        return;
+    }
+    let mut gesture = core.gesture.lock();
+    let Some(session) = gesture.as_mut() else {
+        return;
+    };
+    if session.start != start {
+        return;
+    }
+    let mut ctx = session.context.clone().unwrap_or_else(|| WindowContext {
+        title: String::new(),
+        app_name: String::new(),
+        cursor_x: 0,
+        cursor_y: 0,
+        focused_text: None,
+        cursor_screenshot: None,
+    });
+    let mut ft = ctx.focused_text.clone().unwrap_or_else(|| FocusedTextContext {
+        source: "clipboard probe".to_string(),
+        element_name: None,
+        control_type: None,
+        class_name: None,
+        automation_id: None,
+        parent_name: None,
+        parent_class: None,
+        parent_control_type: None,
+        text_before_cursor: None,
+        selected_text: None,
+        text_after_cursor: None,
+        full_text: None,
+        truncated: false,
+        cursor_known: false,
+        element_bounds: None,
+    });
+    let already_has_selection = ft
+        .selected_text
+        .as_ref()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if !already_has_selection {
+        ft.selected_text = Some(trimmed.clone());
+        ft.source = if ft.source == "clipboard probe" {
+            "clipboard probe".to_string()
+        } else {
+            format!("{} + clipboard", ft.source)
+        };
+    }
+    ctx.focused_text = Some(ft);
+    session.context = Some(ctx);
+    core.log(
+        "info",
+        format!(
+            "captured {} chars of selected text via clipboard probe",
+            trimmed.chars().count()
+        ),
+    );
 }
 
 fn is_context_length_error(err: &anyhow::Error) -> bool {
@@ -2352,8 +2375,9 @@ fn open_dataset_folder() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_models_folder() -> Result<(), String> {
-    let models_dir = settings::models_dir();
+fn open_models_folder(core: tauri::State<'_, Arc<AppCore>>) -> Result<(), String> {
+    let settings = core.settings.lock().clone();
+    let models_dir = settings::models_dir(&settings);
     std::fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
     std::process::Command::new("explorer")
         .arg(&models_dir)

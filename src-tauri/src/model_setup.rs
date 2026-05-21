@@ -204,7 +204,7 @@ pub async fn setup_info(settings: &Settings) -> anyhow::Result<ModelSetupInfo> {
         model_present,
         model_path: settings.model_path.clone(),
         mmproj_path: settings.mmproj_path.clone(),
-        models_dir: settings::models_dir().to_string_lossy().to_string(),
+        models_dir: settings::models_dir(settings).to_string_lossy().to_string(),
         gpu_devices,
         cpu_only_warning,
         candidates,
@@ -224,7 +224,7 @@ where
 {
     let known = known_file(repo, file)
         .ok_or_else(|| anyhow!("unsupported model selection: {repo}/{file}"))?;
-    let models_dir = settings::models_dir();
+    let models_dir = settings::models_dir(settings);
     let repo_dir = models_dir.join(repo.replace('/', "__"));
     fs::create_dir_all(&repo_dir)?;
     let destination = repo_dir.join(
@@ -332,7 +332,7 @@ async fn discover_gemma_ggufs(gpus: &[GpuDevice]) -> anyhow::Result<Vec<ModelCan
 
 fn discover_local_models(settings: &Settings) -> Vec<LocalModelFile> {
     let mut models = Vec::new();
-    collect_local_models(&settings::models_dir(), settings, &mut models);
+    collect_local_models(&settings::models_dir(settings), settings, &mut models);
     let current = Path::new(&settings.model_path);
     if current.exists() {
         push_local_model(current, settings, &mut models);
@@ -391,7 +391,7 @@ fn push_local_model(path: &Path, settings: &Settings, models: &mut Vec<LocalMode
 }
 
 fn remember_recent_model_path(settings: &mut Settings, path: &Path) {
-    if is_in_app_models_dir(path) {
+    if is_in_app_models_dir(settings, path) {
         return;
     }
     let path_text = settings::normalize_windows_extended_path(&path.to_string_lossy());
@@ -403,11 +403,11 @@ fn remember_recent_model_path(settings: &mut Settings, path: &Path) {
     settings.recent_model_paths.truncate(12);
 }
 
-fn is_in_app_models_dir(path: &Path) -> bool {
+fn is_in_app_models_dir(settings: &Settings, path: &Path) -> bool {
     let Ok(model_path) = path.canonicalize() else {
         return false;
     };
-    let Ok(models_dir) = settings::models_dir().canonicalize() else {
+    let Ok(models_dir) = settings::models_dir(settings).canonicalize() else {
         return false;
     };
     model_path.starts_with(models_dir)
@@ -484,7 +484,7 @@ fn recommendation(known: &KnownGemmaGguf, gpus: &[GpuDevice]) -> (bool, String) 
     }
 }
 
-pub(crate) fn preferred_gpus(gpus: &[GpuDevice]) -> Vec<&GpuDevice> {
+fn preferred_gpus(gpus: &[GpuDevice]) -> Vec<&GpuDevice> {
     let discrete = gpus
         .iter()
         .filter(|gpu| !is_integrated_gpu_name(&gpu.name))

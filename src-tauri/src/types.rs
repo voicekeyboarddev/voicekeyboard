@@ -87,6 +87,8 @@ pub struct ModelInputSnapshot {
     pub stage: String,
     pub endpoint: String,
     pub prompt: String,
+    #[serde(default)]
+    pub image_attached: bool,
     pub reasoning_mode: Option<String>,
     pub reasoning_budget: Option<i32>,
     pub context: Option<WindowContext>,
