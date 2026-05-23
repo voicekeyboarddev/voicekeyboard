@@ -234,6 +234,7 @@ type OverlayState = {
   transcript?: string;
   pending_text?: string;
   prompt_panel?: PromptPanelState | null;
+  feedback_id?: number | null;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -529,6 +530,13 @@ function renderOverlay() {
     bindOverlay();
     return;
   }
+  const wrongHint =
+    overlayState.state === "done" && overlayState.feedback_id
+      ? `<button class="overlay-wrong-x" data-overlay-cmd="open-wrong-feedback" title="Click to save this output as a wrong example in the dataset">
+           <span class="overlay-wrong-x-icon" aria-hidden="true">✕</span>
+           <span class="overlay-wrong-x-label">Save as wrong</span>
+         </button>`
+      : "";
   app.innerHTML = `
     <main class="overlay-shell ${esc(overlayState.state)}">
       <div class="overlay-glass">
@@ -537,6 +545,7 @@ function renderOverlay() {
           <strong>${esc(title)}</strong>
           <p>${esc(detail)}</p>
         </div>
+        ${wrongHint}
       </div>
     </main>
   `;
@@ -577,9 +586,10 @@ function renderPromptPanel(panel: PromptPanelState) {
           <textarea id="prompt-result-text" readonly>${esc(panel.text || panel.source_output || "")}</textarea>
         </label>
         ${panel.can_save_wrong ? `
+          ${panel.kind === "feedback" ? `<p class="prompt-hint">Saving here writes a negative example to the on-disk dataset. Type what should have happened (optional) and click Save Wrong Output.</p>` : ""}
           <label>
             <span>Expected behavior/output (optional)</span>
-            <textarea id="${expectedId}" class="expected-feedback"></textarea>
+            <textarea id="${expectedId}" class="expected-feedback" placeholder="What should have been typed or done instead?"></textarea>
           </label>
         ` : ""}
         <div class="prompt-actions">
@@ -1574,6 +1584,22 @@ function bindOverlay() {
   });
 }
 
+// Small toast at the bottom of the overlay so failures / confirmations are
+// never silent. Used for save-wrong-feedback so the user knows whether the
+// click actually did something.
+function showOverlayBanner(message: string) {
+  let banner = document.getElementById("overlay-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "overlay-banner";
+    banner.className = "overlay-banner";
+    document.body.appendChild(banner);
+  }
+  banner.textContent = message;
+  banner.classList.add("visible");
+  window.setTimeout(() => banner?.classList.remove("visible"), 3500);
+}
+
 async function playRecording(id: number) {
   try {
     snapshot = await invoke("play_recording", { id });
@@ -1742,15 +1768,29 @@ async function runOverlayCommand(cmd: string) {
       await navigator.clipboard.writeText(text);
       return;
     }
+    if (cmd === "open-wrong-feedback") {
+      snapshot = await invoke("open_wrong_feedback_popup");
+      return;
+    }
     if (cmd === "save-wrong-feedback") {
       const panel = overlayState.prompt_panel;
-      if (!panel?.recording_id) return;
+      if (!panel?.recording_id) {
+        // Make this visible so a "nothing happens" report is unambiguous.
+        showOverlayBanner("No recording is available to save as wrong.");
+        return;
+      }
       const expected = (document.getElementById(`expected-answer-${panel.recording_id}`) as HTMLTextAreaElement | null)?.value ?? "";
-      snapshot = await invoke("save_feedback_example", {
-        correct: false,
-        recordingId: panel.recording_id,
-        expectedOutput: expected || null
-      });
+      try {
+        snapshot = await invoke("save_feedback_example", {
+          correct: false,
+          recordingId: panel.recording_id,
+          expectedOutput: expected || null
+        });
+        showOverlayBanner("Saved as wrong example.");
+      } catch (err) {
+        showOverlayBanner(`Save failed: ${String(err)}`);
+        console.error("save_feedback_example failed:", err);
+      }
       return;
     }
     if (cmd === "deny") {
@@ -1803,7 +1843,18 @@ async function boot() {
     snapshot = await invoke("get_status");
     renderOverlay();
     window.addEventListener("blur", () => {
-      if (overlayState.state === "prompt-panel" && overlayState.prompt_panel && !overlayState.prompt_panel.collapsed) {
+      // Auto-collapse the prompt-handoff result popup on blur, but NOT the
+      // wrong-output feedback popup the user opened from the Done card's ✕.
+      // Resize/show during the prompt-panel transition briefly drops focus on
+      // Windows, and that previously collapsed the feedback popup before the
+      // user could see it — looking to them like the card just closed.
+      const panel = overlayState.prompt_panel;
+      if (
+        overlayState.state === "prompt-panel" &&
+        panel &&
+        !panel.collapsed &&
+        panel.kind !== "feedback"
+      ) {
         invoke("set_prompt_panel_collapsed", { collapsed: true }).catch(() => {});
       }
     });

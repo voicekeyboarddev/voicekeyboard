@@ -1293,7 +1293,7 @@ impl AppCore {
         }
     }
 
-    async fn inject_actions(&self, actions: Vec<Action>, settings: Settings) {
+    async fn inject_actions(self: &Arc<Self>, actions: Vec<Action>, settings: Settings) {
         self.inject_actions_with_context(actions, settings, None)
             .await;
     }
@@ -1466,7 +1466,7 @@ impl AppCore {
     }
 
     async fn inject_actions_with_context(
-        &self,
+        self: &Arc<Self>,
         actions: Vec<Action>,
         settings: Settings,
         replacement_context: Option<FocusedTextContext>,
@@ -1518,10 +1518,40 @@ impl AppCore {
                     }
                 };
                 self.set_status("ready");
+                // Show the small post-injection card. update_overlay() runs strictly
+                // after injection::inject() returned, so making the overlay interactive
+                // from this point on cannot disturb SendInput. The Done card itself
+                // carries a ✕ icon (rendered by the frontend when overlay-state.done_id
+                // is present) that opens the wrong-output popup.
                 self.update_overlay(
                     "done",
                     Some(format!("Injected {} action(s)", actions.len())),
                 );
+                // Auto-dismiss the Done card after a short timer so the overlay does
+                // not linger as a foreground-eligible surface.
+                if let Some(recording) = saved_recording.as_ref() {
+                    let core = Arc::clone(self);
+                    let dismiss_id = recording.id;
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(6)).await;
+                        // Only hide if still on the Done card for the same recording.
+                        // Don't clobber a feedback popup the user expanded or any
+                        // later state (recording/processing/injecting/error/...).
+                        let should_clear = {
+                            let state = core.state.lock();
+                            state.prompt_panel.is_none()
+                                && state
+                                    .feedback_candidate
+                                    .as_ref()
+                                    .map(|fc| fc.recording.id == dismiss_id)
+                                    .unwrap_or(false)
+                                && state.status == "ready"
+                        };
+                        if should_clear {
+                            core.update_overlay("idle", None);
+                        }
+                    });
+                }
                 let _ = saved_recording;
                 if replaced_selection {
                     logger.log(
@@ -1559,8 +1589,16 @@ impl AppCore {
     fn update_overlay(&self, state: &str, text: Option<String>) {
         if let Some(app) = self.app.lock().as_ref() {
             if let Some(window) = app.get_webview_window("overlay") {
-                let (transcript, pending_text) = {
+                let (transcript, pending_text, prompt_panel, feedback_id) = {
                     let runtime = self.state.lock();
+                    let feedback_id = if state == "done" {
+                        runtime
+                            .feedback_candidate
+                            .as_ref()
+                            .map(|fc| fc.recording.id)
+                    } else {
+                        None
+                    };
                     (
                         runtime.transcript.clone(),
                         runtime
@@ -1568,6 +1606,8 @@ impl AppCore {
                             .as_ref()
                             .map(|actions| text_from_actions(actions))
                             .unwrap_or_default(),
+                        runtime.prompt_panel.clone(),
+                        feedback_id,
                     )
                 };
                 let payload = serde_json::json!({
@@ -1575,11 +1615,17 @@ impl AppCore {
                     "text": text.unwrap_or_default(),
                     "transcript": transcript,
                     "pending_text": pending_text,
-                    "prompt_panel": self.state.lock().prompt_panel.clone(),
+                    "prompt_panel": prompt_panel,
+                    "feedback_id": feedback_id,
                 });
                 let (width, height) = overlay_dimensions(state);
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                let _ = window.set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel"));
+                // The Done card carries a clickable ✕ icon so it must be interactive,
+                // but only after injection::inject() has finished, which is exactly
+                // when state="done" is emitted. Per docs/transparent-overlay-notes.md
+                // rule 18, this is safe at this point.
+                let _ = window
+                    .set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel" | "done"));
                 let _ = app.emit_to("overlay", "overlay-state", payload);
                 match state {
                     "idle" if self.state.lock().prompt_panel.is_none() => {
@@ -2836,8 +2882,22 @@ fn save_feedback_example(
     } else {
         FeedbackLabel::Negative
     };
-    core.save_feedback(label, recording_id, expected_output)
-        .map_err(|e| e.to_string())?;
+    core.log(
+        "info",
+        format!(
+            "save_feedback_example invoked: correct={correct} recording_id={recording_id:?} expected_len={}",
+            expected_output.as_deref().map(|s| s.len()).unwrap_or(0)
+        ),
+    );
+    if let Err(err) = core.save_feedback(label, recording_id, expected_output) {
+        let msg = format!("save_feedback failed: {err:#}");
+        core.log("error", &msg);
+        // Surface the error in the popup so the user knows something went wrong.
+        core.mutate_prompt_panel(|panel| {
+            panel.error = Some(msg.clone());
+        });
+        return Err(msg);
+    }
     if !correct {
         core.set_prompt_panel(None);
     }
@@ -2855,6 +2915,33 @@ fn set_prompt_panel_collapsed(core: tauri::State<'_, Arc<AppCore>>, collapsed: b
 #[tauri::command]
 fn dismiss_prompt_panel(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
     core.set_prompt_panel(None);
+    core.snapshot()
+}
+
+/// Open the wrong-output feedback popup for the latest injected recording.
+/// Triggered from the small ✕ icon on the Done overlay card. Pushes a
+/// non-collapsed `Feedback`-kind prompt panel so the user gets the popup with
+/// an Expected Output textarea and a Save Wrong Output button.
+#[tauri::command]
+fn open_wrong_feedback_popup(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
+    let candidate = core.state.lock().feedback_candidate.clone();
+    if let Some(fc) = candidate {
+        let recording = fc.recording;
+        core.set_prompt_panel(Some(PromptPanelState {
+            kind: PromptPanelKind::Feedback,
+            state: "ready".to_string(),
+            title: "Wrong output?".to_string(),
+            transcript: recording.transcript.clone(),
+            source_output: recording.output.clone(),
+            text: recording.output.clone(),
+            delivery: None,
+            recording_id: Some(recording.id),
+            can_insert: false,
+            can_save_wrong: true,
+            collapsed: false,
+            error: None,
+        }));
+    }
     core.snapshot()
 }
 
@@ -3200,6 +3287,7 @@ pub fn run() {
             save_feedback_example,
             set_prompt_panel_collapsed,
             dismiss_prompt_panel,
+            open_wrong_feedback_popup,
             open_dataset_folder,
             open_models_folder,
             get_model_setup_info,

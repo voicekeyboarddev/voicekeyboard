@@ -1322,10 +1322,15 @@ fn few_shot_interpretation_prompt(
 Return only the exact text to type, or shortcut tokens like {{{{Enter}}}}, {{{{Ctrl+Z}}}}, {{{{Ctrl+A}}}}.\n\
 Do not return JSON. Do not explain. Do not quote the answer.\n\
 \n\
-Handoff tools you may choose instead of typing:\n\
-- Output exactly {{{{Prompt}}}} when the user asks a direct question for the assistant to answer, asks for long writing, or asks to rewrite, summarize, translate, polish, proofread, or deeply transform selected text.\n\
-- Output exactly {{{{agentic}}}} for multi-step work such as coding mode, computer use, changing clipboard content, saving to project folder, or saving to notes. The app will show a placeholder; do not attempt the steps yourself.\n\
-- Do not use handoff tools for simple dictation, browser navigation, search/address bar text, or direct key presses.\n\
+Default behaviour: just type the user's words as keystrokes. This is true regardless of which app is focused. The user dictates so their words land in whatever field is active; do not second-guess them. The handoff tools below are reserved for rare, exceptional cases — the vast majority of utterances must pass through as text or a known shortcut.\n\
+\n\
+Questions, requests, instructions, and chat-style sentences are NOT a reason to use a handoff tool. If the user said something that could plausibly just be typed into the current field, type it. Examples that must be typed verbatim, not handed off: 'why is the build still failing', 'what is the capital of France', 'can you check the logs', 'tell me about the new feature', 'how do I undo this commit'. The user can decide for themselves whether to send those words to a person, an LLM, a search bar, or a chat field — your job is only to type them.\n\
+\n\
+Handoff tools (use only when the user clearly asks Voice Keyboard itself to author or transform content right now, not when they are typing a message that asks someone else to do it):\n\
+- Output exactly {{{{Prompt}}}} ONLY when the user explicitly asks the local assistant to AUTHOR or REWRITE content that spans multiple sentences. The handoff is for cases where the generated/rewritten output is clearly more than one sentence — e.g. drafting an email, a paragraph, a multi-line message, a summary of selected text, a translation of a paragraph, or rewriting a multi-sentence selection in a different tone. Required triggers (at least one must be present): explicit verbs like 'write', 'draft', 'compose', 'rewrite', 'summarize', 'summarise', 'translate', 'polish', 'proofread', 'paraphrase', 'expand', 'shorten', AND either (a) selected text of more than one sentence to transform, or (b) a clearly multi-sentence authoring request. Single-sentence dictation, short factual questions, short imperative sentences, normal chat-style sentences, requests phrased to a person, single-sentence rewrites of a single-sentence selection, and anything the user could reasonably want typed verbatim are NOT handoffs.\n\
+- Output exactly {{{{agentic}}}} ONLY when the user explicitly requests multi-step computer-use work that requires file/clipboard/notes/project access, such as 'save this to my notes', 'put this on the clipboard', 'save to the project folder', 'open my notes and append', 'apply this patch'. The app will show a placeholder; do not attempt the steps yourself.\n\
+- If you are not certain a handoff is needed, do not use one. Prefer typing over routing. Routing is wrong if the user just wanted their words typed.\n\
+- Do not use handoff tools for simple dictation, questions phrased conversationally, browser navigation, search/address bar text, terminal commands, or direct key presses.\n\
 \n\
 Core rules:\n\
 - If the whole transcript is a verbal shortcut such as 'press enter', 'undo', 'redo', 'copy', 'paste', 'select all', 'tab', 'escape', 'backspace', 'delete', or arrow keys, output only the shortcut token.\n\
@@ -1360,12 +1365,29 @@ Transcript: do control c\n\
 Output: {{{{Ctrl+C}}}}\n\
 \n\
 Transcript: what is the capital of the US\n\
+Output: what is the capital of the US\n\
+\n\
+Transcript: why is it still taking so long to get the diagnostics\n\
+Output: Why is it still taking so long to get the diagnostics?\n\
+\n\
+Transcript: check whether the changes were updated on the usb\n\
+Output: check whether the changes were updated on the USB\n\
+\n\
+Transcript: hey voice keyboard, write a long email apologising for the delay\n\
 Output: {{{{Prompt}}}}\n\
 \n\
-Transcript: write a long email explaining the delay\n\
+Field state: <<<SELECTED:I will not be able to attend tomorrow's meeting because of personal reasons. Please let me know if there is anything I should hand over before I am away.>>>\n\
+Transcript: rewrite this in a more formal tone\n\
 Output: {{{{Prompt}}}}\n\
+\n\
+Field state: <<<SELECTED:see you soon>>>\n\
+Transcript: rewrite this more formally\n\
+Output: I look forward to seeing you soon.\n\
 \n\
 Transcript: save this to my notes\n\
+Output: {{{{agentic}}}}\n\
+\n\
+Transcript: put my address on the clipboard\n\
 Output: {{{{agentic}}}}\n\
 \n\
 Transcript: delete this\n\
@@ -1744,6 +1766,102 @@ mod tests {
     }
 
     #[test]
+    fn interpretation_prompt_emphasises_multi_sentence_handoff() {
+        let prompt = interpretation_prompt(
+            "anything",
+            None,
+            false,
+            "",
+            "English",
+            &[],
+        );
+        // The rule must mention multi-sentence as the bar for {{Prompt}}.
+        assert!(prompt.contains("spans multiple sentences"));
+        // Single-sentence rewrites must NOT route.
+        assert!(prompt.contains("single-sentence rewrites of a single-sentence selection"));
+        // Negative-rewrite few-shot: a short selection rewritten inline, not handed off.
+        assert!(prompt.contains("Output: I look forward to seeing you soon."));
+    }
+
+    #[test]
+    fn interpretation_prompt_flags_handoff_tools_as_exceptional() {
+        let prompt = interpretation_prompt(
+            "anything",
+            None,
+            false,
+            "",
+            "English",
+            &[],
+        );
+        // Default behaviour preamble: just type.
+        assert!(
+            prompt.contains("rare, exceptional cases"),
+            "missing 'rare, exceptional cases' framing: {}",
+            prompt
+        );
+        // Tightened {{Prompt}} rule names required verbs.
+        assert!(prompt.contains("explicit verbs"));
+        assert!(prompt.contains("'rewrite'"));
+        assert!(prompt.contains("'summarize'"));
+        // Negative few-shots: questions should pass through as text, not {{Prompt}}.
+        assert!(prompt.contains("Output: what is the capital of the US"));
+        assert!(prompt.contains("Output: Why is it still taking so long to get the diagnostics?"));
+    }
+
+    #[test]
+    fn interpretation_prompt_treats_questions_as_typed_text_regardless_of_app() {
+        // Same explicit guidance must appear regardless of focused app. No app-list
+        // hard-coding: the prompt itself tells the model not to route ordinary
+        // questions or chat-style sentences anywhere.
+        for ctx in [
+            None,
+            Some(WindowContext {
+                app_name: "claude.exe".to_string(),
+                title: "Claude".to_string(),
+                cursor_x: 0,
+                cursor_y: 0,
+                focused_text: None,
+                cursor_screenshot: None,
+            }),
+            Some(WindowContext {
+                app_name: "msedge.exe".to_string(),
+                title: "ChatGPT - New chat".to_string(),
+                cursor_x: 0,
+                cursor_y: 0,
+                focused_text: None,
+                cursor_screenshot: None,
+            }),
+            Some(WindowContext {
+                app_name: "notepad.exe".to_string(),
+                title: "Untitled - Notepad".to_string(),
+                cursor_x: 0,
+                cursor_y: 0,
+                focused_text: None,
+                cursor_screenshot: None,
+            }),
+        ] {
+            let prompt = interpretation_prompt(
+                "anything",
+                ctx.as_ref(),
+                false,
+                "",
+                "English",
+                &[],
+            );
+            assert!(
+                prompt.contains("Questions, requests, instructions, and chat-style sentences are NOT a reason to use a handoff tool"),
+                "generic 'questions are not handoffs' rule missing: {}",
+                prompt
+            );
+            assert!(
+                prompt.contains("regardless of which app is focused"),
+                "app-agnostic default-type rule missing: {}",
+                prompt
+            );
+        }
+    }
+
+    #[test]
     fn prompt_handoff_prompt_requires_delivery_envelope() {
         let prompt = prompt_handoff_prompt("write a reply", None, &[]);
         assert!(prompt.contains("\"delivery\":\"ui\"|\"keyboard\""));
@@ -1889,7 +2007,9 @@ fn select_llama_device(settings: &Settings) -> Option<String> {
     {
         return Some(configured.to_string());
     }
-    devices.first().map(|device| device.id.clone())
+    model_setup::preferred_gpus(&devices)
+        .first()
+        .map(|device| device.id.clone())
 }
 
 fn server_port(server_url: &str) -> String {
