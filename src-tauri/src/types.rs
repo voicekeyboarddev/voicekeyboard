@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum Action {
     Text { value: String },
     Shortcut { keys: Vec<String> },
+    Prompt,
+    Agentic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -124,6 +126,30 @@ pub struct RecordingEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptPanelKind {
+    Prompt,
+    Agentic,
+    Feedback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptPanelState {
+    pub kind: PromptPanelKind,
+    pub state: String,
+    pub title: String,
+    pub transcript: String,
+    pub source_output: String,
+    pub text: String,
+    pub delivery: Option<String>,
+    pub recording_id: Option<u64>,
+    pub can_insert: bool,
+    pub can_save_wrong: bool,
+    pub collapsed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusSnapshot {
     pub status: String,
     pub hook_running: bool,
@@ -140,6 +166,7 @@ pub struct StatusSnapshot {
     pub request_logs: Vec<RequestLog>,
     pub model_inputs: Vec<ModelInputSnapshot>,
     pub recordings: Vec<RecordingEntry>,
+    pub prompt_panel: Option<PromptPanelState>,
     pub metrics: SystemMetrics,
     pub settings: crate::settings::Settings,
 }

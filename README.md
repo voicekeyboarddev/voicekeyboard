@@ -49,7 +49,8 @@ Everything runs on-device. No cloud calls. No audio leaves your machine.
 - **Address-bar smarts** — "gmail dot com" → `gmail.com{{Enter}}`, "open YouTube" → `https://www.youtube.com{{Enter}}`.
 - **Spoken-email normalisation** — "jane the number four doe at gmail dot com" → `jane4doe@gmail.com`.
 - **Diagnostics panel** — view the exact prompt, context, audio path, and screenshot the model received, plus the raw model output.
-- **Built-in feedback / dataset capture** — flag correct or wrong examples from Diagnostics; the app writes JSONL plus paired WAVs for later fine-tuning.
+- **Prompt / agentic handoff tokens** — the local interpreter can return `{{Prompt}}` for stronger one-shot Q&A/writing/rewrite work or `{{agentic}}` for future multi-step tasks. Prompt handoff streams into the bottom overlay and can use either local thinking mode or a custom OpenAI-compatible endpoint.
+- **Built-in wrong-output feedback capture** — after injection, flag a wrong output from the overlay or latest Diagnostics row; the app writes JSONL plus paired WAVs and optional expected behavior for later fine-tuning.
 - **Kill switch + dry run** — global enable/disable and a "don't actually type" preview mode.
 
 ## Quick start
@@ -118,7 +119,7 @@ For VM / clean-machine testing, see [docs/installer-and-vm-testing.md](docs/inst
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Tauri frontend (TypeScript + Vite)         src/                 │
-│    Diagnostics UI, settings, dataset capture                     │
+│    Diagnostics UI, prompt overlay, settings, wrong-output capture │
 └───────────────┬──────────────────────────────────────────────────┘
                 │  Tauri IPC
 ┌───────────────▼──────────────────────────────────────────────────┐
@@ -153,6 +154,10 @@ editable from the in-app Settings tab. Key options:
 | `confirm_large_text_chars` | 800 | Confirm before injecting unusually long output. |
 | `kill_switch_enabled` | true | Global enable/disable from tray. |
 | `common_terms` | "" | Free-text hints (your name, common emails/companies) added to every prompt. |
+
+For app/context edge cases that are not fully automated yet, keep
+[docs/regression-checklist.md](docs/regression-checklist.md) updated with the
+manual or agent QA steps.
 
 ## Roadmap
 

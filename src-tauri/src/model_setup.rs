@@ -256,13 +256,21 @@ where
             &mut progress,
         )
         .await
-        .with_context(|| format!("failed to download required projector/adaptor {}", known.mmproj))?;
+        .with_context(|| {
+            format!(
+                "failed to download required projector/adaptor {}",
+                known.mmproj
+            )
+        })?;
     }
     if mmproj_dest.exists() {
         next.mmproj_path =
             settings::normalize_windows_extended_path(&mmproj_dest.to_string_lossy());
     } else {
-        anyhow::bail!("required projector/adaptor was not downloaded: {}", known.mmproj);
+        anyhow::bail!(
+            "required projector/adaptor was not downloaded: {}",
+            known.mmproj
+        );
     }
     settings::save_settings(&next)?;
     Ok(next)
@@ -543,7 +551,11 @@ async fn download_hf_file(
     progress: &mut (impl FnMut(ModelDownloadProgress) + Send),
 ) -> anyhow::Result<()> {
     if destination.exists() {
-        let downloaded_bytes = destination.metadata().ok().map(|meta| meta.len()).unwrap_or(0);
+        let downloaded_bytes = destination
+            .metadata()
+            .ok()
+            .map(|meta| meta.len())
+            .unwrap_or(0);
         progress(ModelDownloadProgress {
             repo: repo.to_string(),
             file: file.to_string(),

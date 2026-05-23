@@ -2,6 +2,18 @@ use crate::types::{Action, ParsedOutput};
 
 pub fn parse_output(raw: &str, shortcuts_enabled: bool) -> ParsedOutput {
     let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("{{Prompt}}") {
+        return ParsedOutput {
+            actions: vec![Action::Prompt],
+            confidence: None,
+        };
+    }
+    if trimmed.eq_ignore_ascii_case("{{agentic}}") {
+        return ParsedOutput {
+            actions: vec![Action::Agentic],
+            confidence: None,
+        };
+    }
     if let Some(parsed) = parse_json(trimmed) {
         return filter_shortcuts(parsed, shortcuts_enabled);
     }
@@ -34,11 +46,12 @@ fn filter_shortcuts(mut parsed: ParsedOutput, shortcuts_enabled: bool) -> Parsed
     parsed.actions.retain(|action| match action {
         Action::Text { value } => !value.trim().is_empty(),
         Action::Shortcut { keys } => !keys.is_empty(),
+        Action::Prompt | Action::Agentic => true,
     });
     if !shortcuts_enabled {
         parsed
             .actions
-            .retain(|action| matches!(action, Action::Text { .. }));
+            .retain(|action| matches!(action, Action::Text { .. } | Action::Prompt | Action::Agentic));
     }
     parsed
 }
@@ -346,6 +359,18 @@ mod tests {
                 value: "hello".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn parses_prompt_handoff_token() {
+        let parsed = parse_output("{{Prompt}}", true);
+        assert_eq!(parsed.actions, vec![Action::Prompt]);
+    }
+
+    #[test]
+    fn parses_agentic_handoff_token() {
+        let parsed = parse_output("{{agentic}}", true);
+        assert_eq!(parsed.actions, vec![Action::Agentic]);
     }
 
     #[test]

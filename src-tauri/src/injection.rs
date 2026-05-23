@@ -49,6 +49,7 @@ pub fn inject(
         match action {
             Action::Text { value } => send_text(value)?,
             Action::Shortcut { keys } => send_shortcut(keys)?,
+            Action::Prompt | Action::Agentic => {}
         }
         thread::sleep(Duration::from_millis(settings.injection_delay_ms));
     }

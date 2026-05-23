@@ -40,6 +40,14 @@ pub struct StreamingInterpretation {
 }
 
 #[derive(Debug, Clone)]
+pub struct PromptHandoffResponse {
+    pub delivery: String,
+    pub text: String,
+    pub response: ModelResponse,
+    pub used_media_fallback: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct RecentTextContext {
     pub stage: String,
     pub transcript: String,
@@ -173,11 +181,12 @@ impl ModelClient {
             let server_log = open_server_log()?;
             let server_log_err = server_log.try_clone()?;
             hide_child_window(&mut command);
-            let child = command
+            let command = command
                 .arg("--host")
                 .arg("127.0.0.1")
                 .arg("--port")
-                .arg(port)
+                .arg(port);
+            let child = command
                 .arg("-ngl")
                 .arg("all")
                 .arg("--fit")
@@ -185,7 +194,12 @@ impl ModelClient {
                 .arg("--fit-target")
                 .arg("384")
                 .arg("-c")
-                .arg(settings.context_length_tokens.clamp(2048, 32768).to_string())
+                .arg(
+                    settings
+                        .context_length_tokens
+                        .clamp(2048, 32768)
+                        .to_string(),
+                )
                 .arg("--parallel")
                 .arg("1")
                 .arg("--no-cache-idle-slots")
@@ -310,7 +324,9 @@ impl ModelClient {
             .map_err(|_| anyhow!("model warm-up request timed out"))?
             .map_err(|err| {
                 if let Some(tail) = recent_server_log_tail() {
-                    anyhow!("model warm-up request failed: {err:#}\n\nRecent llama-server.log:\n{tail}")
+                    anyhow!(
+                        "model warm-up request failed: {err:#}\n\nRecent llama-server.log:\n{tail}"
+                    )
                 } else {
                     anyhow!("model warm-up request failed: {err:#}")
                 }
@@ -448,6 +464,100 @@ impl ModelClient {
         })
     }
 
+    pub async fn prompt_handoff(
+        &self,
+        settings: &Settings,
+        transcript: &str,
+        context: Option<&WindowContext>,
+        wav_path: Option<&Path>,
+        recent_context: &[RecentTextContext],
+        mut on_text: impl FnMut(&str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<PromptHandoffResponse> {
+        let provider = settings.prompt_provider.trim().to_ascii_lowercase();
+        let use_custom = provider == "custom" || provider == "openai";
+        if !use_custom {
+            self.ensure_running(settings).await?;
+        }
+
+        let prompt = prompt_handoff_prompt(transcript, context, recent_context);
+        let body_with_media =
+            self.prompt_handoff_body(settings, &prompt, context, wav_path, use_custom).await?;
+        let url = if use_custom && !settings.prompt_endpoint_url.trim().is_empty() {
+            format!(
+                "{}/v1/chat/completions",
+                settings.prompt_endpoint_url.trim_end_matches('/')
+            )
+        } else {
+            format!("{}/v1/chat/completions", settings.server_url.trim_end_matches('/'))
+        };
+        let api_key = if use_custom && !settings.prompt_api_key.trim().is_empty() {
+            Some(settings.prompt_api_key.trim())
+        } else {
+            None
+        };
+
+        let mut used_media_fallback = false;
+        let interpreted = match self
+            .chat_with_streaming_text_at(
+                &url,
+                api_key,
+                body_with_media,
+                &mut on_text,
+                StreamParseMode::JsonTextValue,
+            )
+            .await
+        {
+            Ok(ok) => ok,
+            Err(media_err)
+                if use_custom
+                    && (wav_path.is_some()
+                        || context.and_then(|c| c.cursor_screenshot.as_ref()).is_some()) =>
+            {
+                used_media_fallback = true;
+                let fallback_body =
+                    self.prompt_handoff_text_only_body(settings, &prompt, use_custom);
+                self.chat_with_streaming_text_at(
+                    &url,
+                    api_key,
+                    fallback_body,
+                    &mut on_text,
+                    StreamParseMode::JsonTextValue,
+                )
+                .await
+                .map_err(|fallback_err| {
+                    anyhow!(
+                        "prompt handoff media request failed: {media_err}; text-only retry failed: {fallback_err}"
+                    )
+                })?
+            }
+            Err(err) => return Err(err),
+        };
+
+        let content = interpreted.response.content.trim();
+        let value: serde_json::Value = serde_json::from_str(content)
+            .with_context(|| format!("prompt handoff did not return JSON envelope: {content}"))?;
+        let delivery = value["delivery"]
+            .as_str()
+            .unwrap_or("ui")
+            .trim()
+            .to_ascii_lowercase();
+        let delivery = if delivery == "keyboard" { "keyboard" } else { "ui" }.to_string();
+        let text = value["text"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if text.is_empty() {
+            anyhow::bail!("prompt handoff JSON did not contain non-empty text");
+        }
+        Ok(PromptHandoffResponse {
+            delivery,
+            text,
+            response: interpreted.response,
+            used_media_fallback,
+        })
+    }
+
     fn interpret_fallback_body(
         &self,
         settings: &Settings,
@@ -561,6 +671,87 @@ impl ModelClient {
         (body, image_attached, prompt)
     }
 
+    async fn prompt_handoff_body(
+        &self,
+        settings: &Settings,
+        prompt: &str,
+        context: Option<&WindowContext>,
+        wav_path: Option<&Path>,
+        use_custom: bool,
+    ) -> anyhow::Result<serde_json::Value> {
+        let model = if use_custom {
+            nonempty(settings.prompt_model.trim(), "gpt-4.1")
+        } else {
+            "local"
+        };
+        let mut content = vec![json!({
+            "type": "text",
+            "text": prompt
+        })];
+        if let Some(path) = wav_path {
+            let wav = tokio::fs::read(path).await?;
+            content.push(json!({
+                "type": "input_audio",
+                "input_audio": {
+                    "data": general_purpose::STANDARD.encode(wav),
+                    "format": "wav"
+                }
+            }));
+        }
+        if let Some(image) = context.and_then(|c| c.cursor_screenshot.as_ref()) {
+            content.push(json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:image/png;base64,{}", image.png_base64)
+                }
+            }));
+        }
+        let mut body = json!({
+            "model": model,
+            "stream": true,
+            "temperature": 0,
+            "messages": [{
+                "role": "user",
+                "content": content
+            }]
+        });
+        if !use_custom {
+            body["reasoning"] = json!("on");
+            body["reasoning_budget"] = json!(settings.thinking_handoff_reasoning_budget);
+        }
+        Ok(body)
+    }
+
+    fn prompt_handoff_text_only_body(
+        &self,
+        settings: &Settings,
+        prompt: &str,
+        use_custom: bool,
+    ) -> serde_json::Value {
+        let model = if use_custom {
+            nonempty(settings.prompt_model.trim(), "gpt-4.1")
+        } else {
+            "local"
+        };
+        let mut body = json!({
+            "model": model,
+            "stream": true,
+            "temperature": 0,
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": prompt
+                }]
+            }]
+        });
+        if !use_custom {
+            body["reasoning"] = json!("on");
+            body["reasoning_budget"] = json!(settings.thinking_handoff_reasoning_budget);
+        }
+        body
+    }
+
     async fn chat(
         &self,
         settings: &Settings,
@@ -587,22 +778,28 @@ impl ModelClient {
             "{}/v1/chat/completions",
             settings.server_url.trim_end_matches('/')
         );
+        self.chat_with_streaming_text_at(&url, None, body, on_text, mode)
+            .await
+    }
+
+    async fn chat_with_streaming_text_at(
+        &self,
+        url: &str,
+        api_key: Option<&str>,
+        body: serde_json::Value,
+        on_text: &mut impl FnMut(&str) -> anyhow::Result<()>,
+        mode: StreamParseMode,
+    ) -> anyhow::Result<StreamingInterpretation> {
         let started = Instant::now();
-        let response = self
-            .inner
-            .http
-            .post(url)
-            .json(&body)
-            .timeout(Duration::from_secs(120))
-            .send()
-            .await?;
+        let mut request = self.inner.http.post(url).json(&body);
+        if let Some(key) = api_key.filter(|key| !key.trim().is_empty()) {
+            request = request.bearer_auth(key.trim());
+        }
+        let response = request.timeout(Duration::from_secs(120)).send().await?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(anyhow!(
-                "llama server returned {status}: {}",
-                body.trim()
-            ));
+            return Err(anyhow!("llama server returned {status}: {}", body.trim()));
         }
 
         let mut stream = response.bytes_stream();
@@ -973,7 +1170,16 @@ fn terminal_context_prompt(shell: &str) -> String {
             "Clear-Host",
         )
     } else {
-        ("CMD", "dir", "dir /a", "cd", "dir /s /b *X*", "del", "type", "cls")
+        (
+            "CMD",
+            "dir",
+            "dir /a",
+            "cd",
+            "dir /s /b *X*",
+            "del",
+            "type",
+            "cls",
+        )
     };
     format!(
         "\n\
@@ -1053,6 +1259,36 @@ pub fn thinking_interpretation_prompt(
     )
 }
 
+pub fn prompt_handoff_prompt(
+    transcript: &str,
+    context: Option<&WindowContext>,
+    recent_context: &[RecentTextContext],
+) -> String {
+    let context_text = format_window_context(context, true);
+    let recent_context_section = format_recent_context(recent_context);
+    format!(
+        "You are the second-level Prompt agent for Voice Keyboard.\n\
+The local interpreter handed this request to you because it needs a stronger answer, rewrite, summary, translation, or longer composition.\n\
+\n\
+Return exactly one JSON object and no Markdown/code fence/explanation outside it:\n\
+{{\"delivery\":\"ui\"|\"keyboard\",\"text\":\"...\"}}\n\
+\n\
+Delivery rules:\n\
+- Use \"ui\" for direct questions, explanations, summaries to read, and answers the user likely wants shown in the popup.\n\
+- Use \"keyboard\" for text that should be inserted into the active field or replace selected text.\n\
+- The app will decide insert vs replace from the captured selection; do not include labels like Insert or Replace in the text.\n\
+- Preserve the selected text language unless the user asks to translate.\n\
+- Return only the final useful content in text.\n\
+\n\
+{recent_context_section}{context_text}\n\
+Transcript/request: {transcript}\n\
+JSON:",
+        recent_context_section = recent_context_section,
+        context_text = context_text,
+        transcript = transcript,
+    )
+}
+
 fn few_shot_interpretation_prompt(
     transcript: &str,
     context: Option<&WindowContext>,
@@ -1065,7 +1301,10 @@ fn few_shot_interpretation_prompt(
     let common_terms_section = if common_terms.trim().is_empty() {
         String::new()
     } else {
-        format!("Common terms:\n{}\n\n", common_terms.trim())
+        format!(
+            "Common terms / preferred spellings:\n{}\nUse these as high-priority hints for ambiguous ASR, especially names, emails, companies, products, and repeated personal terms. Prefer these exact spellings when they fit the transcript.\n\n",
+            common_terms.trim()
+        )
     };
     let spoken_language_section = if spoken_languages.trim().is_empty() {
         String::new()
@@ -1077,10 +1316,16 @@ fn few_shot_interpretation_prompt(
     };
     let recent_context_section = format_recent_context(recent_context);
     let extra = context_extra_instructions(detect_context_kind(context));
+    let image_instruction = image_context_instruction(image_attached);
     format!(
         "You are a voice keyboard interpreter.\n\
 Return only the exact text to type, or shortcut tokens like {{{{Enter}}}}, {{{{Ctrl+Z}}}}, {{{{Ctrl+A}}}}.\n\
 Do not return JSON. Do not explain. Do not quote the answer.\n\
+\n\
+Handoff tools you may choose instead of typing:\n\
+- Output exactly {{{{Prompt}}}} when the user asks a direct question for the assistant to answer, asks for long writing, or asks to rewrite, summarize, translate, polish, proofread, or deeply transform selected text.\n\
+- Output exactly {{{{agentic}}}} for multi-step work such as coding mode, computer use, changing clipboard content, saving to project folder, or saving to notes. The app will show a placeholder; do not attempt the steps yourself.\n\
+- Do not use handoff tools for simple dictation, browser navigation, search/address bar text, or direct key presses.\n\
 \n\
 Core rules:\n\
 - If the whole transcript is a verbal shortcut such as 'press enter', 'undo', 'redo', 'copy', 'paste', 'select all', 'tab', 'escape', 'backspace', 'delete', or arrow keys, output only the shortcut token.\n\
@@ -1096,6 +1341,7 @@ Core rules:\n\
 - If the cursor is in the middle of an email, URL, or word, continue inline without adding a space.\n\
 - Phrases like 'on the next line type ...' or 'new paragraph ...' mean insert {{{{Enter}}}} or {{{{Enter}}}}{{{{Enter}}}} before the remaining text.\n\
 - Avoid duplicate spaces and duplicate punctuation.\n\
+- {image_instruction}\n\
 \n\
 Few-shot examples:\n\
 Transcript: press enter\n\
@@ -1112,6 +1358,15 @@ Output: {{{{Ctrl+A}}}}\n\
 \n\
 Transcript: do control c\n\
 Output: {{{{Ctrl+C}}}}\n\
+\n\
+Transcript: what is the capital of the US\n\
+Output: {{{{Prompt}}}}\n\
+\n\
+Transcript: write a long email explaining the delay\n\
+Output: {{{{Prompt}}}}\n\
+\n\
+Transcript: save this to my notes\n\
+Output: {{{{agentic}}}}\n\
 \n\
 Transcript: delete this\n\
 Output: {{{{Delete}}}}\n\
@@ -1171,6 +1426,7 @@ Output:",
         common_terms_section = common_terms_section,
         recent_context_section = recent_context_section,
         extra = extra,
+        image_instruction = image_instruction,
         context_text = context_text,
         transcript = transcript,
     )
@@ -1188,7 +1444,10 @@ fn compact_thinking_prompt(
     let common_terms_section = if common_terms.trim().is_empty() {
         String::new()
     } else {
-        format!("Common terms:\n{}\n\n", common_terms.trim())
+        format!(
+            "Common terms / preferred spellings:\n{}\nUse these as high-priority hints for ambiguous ASR, especially names, emails, companies, products, and repeated personal terms. Prefer these exact spellings when they fit the transcript.\n\n",
+            common_terms.trim()
+        )
     };
     let spoken_language_section = if spoken_languages.trim().is_empty() {
         String::new()
@@ -1200,16 +1459,21 @@ fn compact_thinking_prompt(
     };
     let recent_context_section = format_recent_context(recent_context);
     let extra = context_extra_instructions(detect_context_kind(context));
+    let image_instruction = image_context_instruction(image_attached);
     format!(
         "You are the rewrite handoff for a voice keyboard.\n\
 Return only the final text to paste, or a shortcut token if the user explicitly asks for a key press.\n\
 Do not explain. Do not return JSON. Do not add notes.\n\
+\n\
+If the task needs a stronger second-stage answer or deep transformation, output exactly {{{{Prompt}}}} instead of doing it here.\n\
+If the task asks for coding mode, computer use, clipboard changes, saving to project folder, or saving to notes, output exactly {{{{agentic}}}}.\n\
 \n\
 Use the transcript as the instruction. Prefer transforming selected text when it exists.\n\
 Look at the cursor context to preserve spacing, punctuation, and capitalization.\n\
 Do not repeat stale text from recent history unless it is clearly needed.\n\
 When selected text exists, focus on that selected text and only the nearby before/after snippets.\n\
 For long selected passages, preserve the original language and script unless the transcript explicitly asks for translation.\n\
+{image_instruction}\n\
 \n\
 Few-shot examples:\n\
 Selected text: this are bad sentence.\n\
@@ -1242,6 +1506,7 @@ Final output:",
         common_terms_section = common_terms_section,
         recent_context_section = recent_context_section,
         extra = extra,
+        image_instruction = image_instruction,
         context_text = context_text,
         transcript = transcript,
     )
@@ -1279,7 +1544,7 @@ fn build_interpretation_prompt(
         String::new()
     } else {
         format!(
-            "Common terms to keep in mind for this user:\n{}\n",
+            "Common terms / preferred spellings for this user:\n{}\nUse these as high-priority hints for ambiguous ASR, especially names, emails, companies, products, and repeated personal terms. Prefer these exact spellings when they fit the transcript.\n",
             common_terms.trim()
         )
     };
@@ -1385,7 +1650,7 @@ STEP 4 — PUNCTUATION AND CAPITALISATION (use text_before_cursor / text_after_c
 - Preserve surrounding punctuation style and avoid duplicate spaces or duplicate punctuation.\n\
 - Match the punctuation style of surrounding text.\n\
 \n\
-If an attached image is present, use the red cursor marker as cursor/insertion context.\n\
+{image_instruction}\n\
 If image context is required and no image is attached, output {{{{NEEDS_IMAGE}}}}.\n\
 {common_terms_section}{recent_context_section}{extra}{context_text}\n\
 Transcript: {transcript}",
@@ -1395,9 +1660,18 @@ Transcript: {transcript}",
         common_terms_section = common_terms_section,
         recent_context_section = recent_context_section,
         extra = extra,
+        image_instruction = image_context_instruction(image_attached),
         context_text = context_text,
         transcript = transcript,
     )
+}
+
+fn image_context_instruction(image_attached: bool) -> &'static str {
+    if image_attached {
+        "If an attached image is present, use it as visual context for what the user wants, especially the UI state near the red cursor marker. Do not describe the image; use it only to decide the correct text or shortcut."
+    } else {
+        "No image is attached in this pass; rely on text context unless visual context is required."
+    }
 }
 
 fn format_recent_context(recent_context: &[RecentTextContext]) -> String {
@@ -1455,6 +1729,29 @@ mod tests {
     }
 
     #[test]
+    fn interpretation_prompt_documents_prompt_and_agentic_handoffs() {
+        let prompt = interpretation_prompt(
+            "what is the capital of the US",
+            None,
+            false,
+            "",
+            "English",
+            &[],
+        );
+        assert!(prompt.contains("{{Prompt}}"));
+        assert!(prompt.contains("{{agentic}}"));
+        assert!(prompt.contains("what is the capital of the US"));
+    }
+
+    #[test]
+    fn prompt_handoff_prompt_requires_delivery_envelope() {
+        let prompt = prompt_handoff_prompt("write a reply", None, &[]);
+        assert!(prompt.contains("\"delivery\":\"ui\"|\"keyboard\""));
+        assert!(prompt.contains("\"text\":\"...\""));
+        assert!(prompt.contains("write a reply"));
+    }
+
+    #[test]
     fn thinking_prompt_contains_handoff_mode() {
         let prompt =
             thinking_interpretation_prompt("fix the grammar", None, false, "", "English", &[]);
@@ -1489,7 +1786,8 @@ mod tests {
             }),
             cursor_screenshot: None,
         };
-        let prompt = interpretation_prompt("youtube music", Some(&context), false, "", "English", &[]);
+        let prompt =
+            interpretation_prompt("youtube music", Some(&context), false, "", "English", &[]);
         assert!(prompt.contains("BROWSER ADDRESS BAR ACTIVE"));
         assert!(prompt.contains("followed by {{Enter}}"));
         assert!(prompt.contains("https://www.youtube.com/results?search_query=X{{Enter}}"));
@@ -1505,16 +1803,37 @@ mod tests {
             focused_text: None,
             cursor_screenshot: None,
         };
-        let prompt = thinking_interpretation_prompt(
-            "list files",
-            Some(&context),
-            false,
-            "",
-            "English",
-            &[],
-        );
+        let prompt =
+            thinking_interpretation_prompt("list files", Some(&context), false, "", "English", &[]);
         assert!(prompt.contains("POWERSHELL PROMPT ACTIVE"));
         assert!(prompt.contains("Always append {{Enter}}"));
+    }
+
+    #[test]
+    fn common_terms_are_preferred_spellings() {
+        let prompt = interpretation_prompt("write amit", None, false, "Amith", "English", &[]);
+        assert!(prompt.contains("Common terms / preferred spellings"));
+        assert!(prompt.contains("high-priority hints"));
+        assert!(prompt.contains("Amith"));
+    }
+
+    #[test]
+    fn image_prompt_has_separate_visual_instruction() {
+        let without_image = interpretation_prompt("what is here", None, false, "", "English", &[]);
+        let with_image = interpretation_prompt("what is here", None, true, "", "English", &[]);
+        assert!(without_image.contains("No image is attached in this pass"));
+        assert!(with_image.contains("use it as visual context"));
+    }
+
+    #[test]
+    fn managed_llama_launch_does_not_force_image_ubatch() {
+        let mut settings = Settings::default();
+        settings.image_tokens = 70;
+        assert_eq!(settings::valid_image_tokens(settings.image_tokens), 70);
+        settings.image_tokens = 560;
+        assert_eq!(settings::valid_image_tokens(settings.image_tokens), 560);
+        settings.image_tokens = 1120;
+        assert_eq!(settings::valid_image_tokens(settings.image_tokens), 1120);
     }
 }
 
@@ -1849,10 +2168,13 @@ impl StreamingTextParser {
             return Vec::new();
         }
         if !self.saw_text_type {
-            self.saw_text_type = self.raw.contains("\"type\"") && self.raw.contains("\"text\"");
+            self.saw_text_type = self.raw.contains("\"type\"") && self.raw.contains("\"text\"")
+                || self.raw.contains("\"text\"");
         }
         if self.saw_text_type && self.value_start.is_none() {
-            if let Some(start) = find_json_string_value_start(&self.raw, "\"value\"") {
+            if let Some(start) = find_json_string_value_start(&self.raw, "\"value\"")
+                .or_else(|| find_json_string_value_start(&self.raw, "\"text\""))
+            {
                 self.value_start = Some(start);
                 self.scan_index = start;
             }
@@ -1927,6 +2249,14 @@ fn find_json_string_value_start(raw: &str, field: &str) -> Option<usize> {
     let after_colon = &raw[after_colon_index..];
     let quote_offset = after_colon.find('"')?;
     Some(after_colon_index + quote_offset + 1)
+}
+
+fn nonempty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.trim().is_empty() {
+        fallback
+    } else {
+        value.trim()
+    }
 }
 
 fn extract_transcript(content: &str) -> anyhow::Result<String> {

@@ -52,6 +52,11 @@ pub struct Settings {
     pub thinking_handoff_min_chars: usize,
     pub thinking_handoff_reasoning_budget: i32,
     pub thinking_handoff_context_items: usize,
+    pub prompt_provider: String,
+    pub prompt_endpoint_url: String,
+    pub prompt_api_key: String,
+    pub prompt_model: String,
+    pub prompt_auto_inject_keyboard: bool,
 }
 
 impl Default for Settings {
@@ -84,7 +89,7 @@ impl Default for Settings {
             always_send_low_res_image: false,
             image_width: 160,
             image_height: 100,
-            image_tokens: 70,
+            image_tokens: 140,
             context_length_tokens: 4096,
             recent_model_paths: Vec::new(),
             log_retention_bytes: 5 * 1024 * 1024,
@@ -98,6 +103,11 @@ impl Default for Settings {
             thinking_handoff_min_chars: 250,
             thinking_handoff_reasoning_budget: 64,
             thinking_handoff_context_items: 3,
+            prompt_provider: "local".to_string(),
+            prompt_endpoint_url: String::new(),
+            prompt_api_key: String::new(),
+            prompt_model: "gpt-4.1".to_string(),
+            prompt_auto_inject_keyboard: true,
         }
     }
 }
@@ -317,7 +327,7 @@ fn restore_lightweight_image_defaults(settings: &mut Settings) {
     }) {
         settings.image_width = 160;
         settings.image_height = 100;
-        settings.image_tokens = 70;
+        settings.image_tokens = 140;
     }
 }
 

@@ -1117,4 +1117,3 @@ fn set_pixel(rgba: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u
     let index = ((y as u32 * width + x as u32) * 4) as usize;
     rgba[index..index + 4].copy_from_slice(&color);
 }
-

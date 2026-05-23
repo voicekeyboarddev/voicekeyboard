@@ -4,7 +4,9 @@ import "./styles.css";
 
 type Action =
   | { type: "text"; value: string }
-  | { type: "shortcut"; keys: string[] };
+  | { type: "shortcut"; keys: string[] }
+  | { type: "prompt" }
+  | { type: "agentic" };
 
 type Settings = {
   audio_chunk_ms: number;
@@ -48,6 +50,11 @@ type Settings = {
   thinking_handoff_min_chars: number;
   thinking_handoff_reasoning_budget: number;
   thinking_handoff_context_items: number;
+  prompt_provider: string;
+  prompt_endpoint_url: string;
+  prompt_api_key: string;
+  prompt_model: string;
+  prompt_auto_inject_keyboard: boolean;
 };
 
 type SystemMetrics = {
@@ -149,8 +156,24 @@ type Snapshot = {
     audio_format?: string | null;
   }[];
   recordings: RecordingEntry[];
+  prompt_panel?: PromptPanelState | null;
   metrics: SystemMetrics;
   settings: Settings;
+};
+
+type PromptPanelState = {
+  kind: "prompt" | "agentic" | "feedback";
+  state: string;
+  title: string;
+  transcript: string;
+  source_output: string;
+  text: string;
+  delivery?: string | null;
+  recording_id?: number | null;
+  can_insert: boolean;
+  can_save_wrong: boolean;
+  collapsed: boolean;
+  error?: string | null;
 };
 
 type GpuDevice = {
@@ -210,6 +233,7 @@ type OverlayState = {
   text: string;
   transcript?: string;
   pending_text?: string;
+  prompt_panel?: PromptPanelState | null;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -229,6 +253,8 @@ let parserInput = '{{Ctrl+C}}';
 let pendingNegativeId: number | null = null;
 let feedbackToast = "";
 let feedbackToastTimer: number | undefined;
+let settingsFeedback = "";
+let settingsFeedbackTimer: number | undefined;
 let modelSetup: ModelSetupInfo | null = null;
 let modelSetupLoading = false;
 let downloadingModelKeys = new Set<string>();
@@ -236,6 +262,15 @@ let downloadProgress: Record<string, ModelDownloadProgress> = {};
 let downloadProgressRenderTimer: number | undefined;
 let modelSetupDismissed = false;
 let audioInputDevices: AudioInputDevice[] = [];
+let scheduledRender: number | undefined;
+
+function scheduleRender(delayMs = 50) {
+  if (scheduledRender !== undefined) return;
+  scheduledRender = window.setTimeout(() => {
+    scheduledRender = undefined;
+    render();
+  }, delayMs);
+}
 
 function hasTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -263,6 +298,8 @@ function esc(value: string) {
 
 function actionLabel(action: Action) {
   if (action.type === "text") return `Text: ${action.value}`;
+  if (action.type === "prompt") return "Prompt handoff";
+  if (action.type === "agentic") return "Agentic handoff";
   return `Shortcut: ${action.keys.join("+")}`;
 }
 
@@ -343,6 +380,18 @@ function showFeedbackToast(msg: string) {
   render();
 }
 
+function showSettingsFeedback(msg: string, sticky = false) {
+  settingsFeedback = msg;
+  if (settingsFeedbackTimer) window.clearTimeout(settingsFeedbackTimer);
+  if (!sticky) {
+    settingsFeedbackTimer = window.setTimeout(() => {
+      settingsFeedback = "";
+      render();
+    }, 3500);
+  }
+  render();
+}
+
 function captureScrollState() {
   return {
     windowX: window.scrollX,
@@ -385,6 +434,7 @@ function render() {
         ${tabButton("settings", "Settings")}
       </nav>
 
+      ${s ? wrongOutputPanel(s) : ""}
       ${s ? renderTab(s) : `<section class="panel">Loading backend state...</section>`}
       ${s && shouldShowCalibration(s) ? calibrationPrompt(s) : ""}
       ${s && shouldShowModelSetup(s) ? modelSetupPopup(s) : ""}
@@ -395,7 +445,47 @@ function render() {
   window.requestAnimationFrame(() => restoreScrollState(scrollState));
 }
 
+function wrongOutputPanel(s: Snapshot) {
+  const latest = s.recordings[0];
+  if (!latest) {
+    return `
+      <section class="wrong-output-panel inactive">
+        <div>
+          <strong>Dataset feedback</strong>
+          <span>No completed injection is available to mark wrong yet.</span>
+        </div>
+        <button class="secondary" disabled>Wrong Output</button>
+      </section>
+    `;
+  }
+  const active = pendingNegativeId === latest.id;
+  return `
+    <section class="wrong-output-panel">
+      <div>
+        <strong>Latest injection</strong>
+        <span>${esc(latest.transcript).slice(0, 180)}</span>
+      </div>
+      ${active ? `
+        <label>
+          <span>Expected behavior/output</span>
+          <textarea id="expected-answer-top-${latest.id}" placeholder="Optional: type what should have happened"></textarea>
+        </label>
+        <div class="row">
+          <button class="danger" data-save-wrong-confirm="${latest.id}" data-expected-source="top">Save Wrong Output</button>
+          <button class="secondary" data-save-cancel>Cancel</button>
+        </div>
+      ` : `
+        <button class="danger" data-save-wrong="${latest.id}">Wrong Output</button>
+      `}
+    </section>
+  `;
+}
+
 function renderOverlay() {
+  if (overlayState.state === "prompt-panel" && overlayState.prompt_panel) {
+    renderPromptPanel(overlayState.prompt_panel);
+    return;
+  }
   const title =
     overlayState.state === "recording" ? "Recording" :
     overlayState.state === "processing" ? "Processing" :
@@ -448,6 +538,55 @@ function renderOverlay() {
           <p>${esc(detail)}</p>
         </div>
       </div>
+    </main>
+  `;
+  bindOverlay();
+}
+
+function renderPromptPanel(panel: PromptPanelState) {
+  if (panel.collapsed) {
+    app.innerHTML = `
+      <main class="overlay-shell prompt-overlay collapsed">
+        <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.kind === "feedback" ? "Wrong output?" : panel.title)}</button>
+      </main>
+    `;
+    bindOverlay();
+    return;
+  }
+  const expectedId = panel.recording_id ? `expected-answer-${panel.recording_id}` : "expected-answer";
+  app.innerHTML = `
+    <main class="overlay-shell prompt-overlay">
+      <section class="prompt-panel">
+        <div class="prompt-head">
+          <div>
+            <strong>${esc(panel.title)}</strong>
+            <span>${esc(panel.state)}${panel.delivery ? ` · ${esc(panel.delivery)}` : ""}</span>
+          </div>
+          <div class="row">
+            <button class="secondary mini" data-overlay-cmd="prompt-collapse">Collapse</button>
+            <button class="secondary mini" data-overlay-cmd="prompt-dismiss">Close</button>
+          </div>
+        </div>
+        ${panel.error ? `<div class="prompt-error">${esc(panel.error)}</div>` : ""}
+        <label>
+          <span>Transcript</span>
+          <input readonly value="${esc(panel.transcript || "")}" />
+        </label>
+        <label>
+          <span>${panel.kind === "feedback" ? "Output" : "Result"}</span>
+          <textarea id="prompt-result-text" readonly>${esc(panel.text || panel.source_output || "")}</textarea>
+        </label>
+        ${panel.can_save_wrong ? `
+          <label>
+            <span>Expected behavior/output (optional)</span>
+            <textarea id="${expectedId}" class="expected-feedback"></textarea>
+          </label>
+        ` : ""}
+        <div class="prompt-actions">
+          <button class="secondary" data-overlay-cmd="copy-prompt-result">Copy</button>
+          ${panel.can_save_wrong && panel.recording_id ? `<button class="danger" data-overlay-cmd="save-wrong-feedback">Save Wrong Output</button>` : ""}
+        </div>
+      </section>
     </main>
   `;
   bindOverlay();
@@ -530,6 +669,7 @@ function mainView(s: Snapshot) {
           <button class="secondary" data-cmd="${s.paused ? "resume" : "pause"}">${s.paused ? "Resume" : "Pause"}</button>
           <button class="secondary" data-cmd="calibrate-audio">Calibrate mic</button>
           <button class="secondary" data-cmd="context">Snapshot context</button>
+          <button class="secondary" data-cmd="reset-llama">Reset llama.cpp</button>
           <button class="danger" data-cmd="abort">Abort injection</button>
           <button class="danger" data-cmd="exit-app">Stop app</button>
         </div>
@@ -583,7 +723,7 @@ function mainView(s: Snapshot) {
       </div>
       <div class="panel log-panel">
         <h2>Live Log</h2>
-        ${logs(s)}
+        ${logs(s, false)}
       </div>
     </section>
   `;
@@ -606,6 +746,7 @@ function diagnostics(s: Snapshot) {
         <div class="toolbar stacked">
           <button data-cmd="test-audio">Test audio input</button>
           <button data-cmd="test-model">Test model response</button>
+          <button class="secondary" data-cmd="reset-llama">Reset llama.cpp backend</button>
           <button data-cmd="test-injection">Test injection dry-run</button>
           <button data-cmd="calibrate-audio">Calibrate mic sensitivity</button>
           <button class="secondary" data-cmd="open-models-folder">Open models folder</button>
@@ -628,7 +769,7 @@ function diagnostics(s: Snapshot) {
       </div>
       <div class="panel log-panel">
         <h2>Diagnostics Log</h2>
-        ${logs(s)}
+        ${logs(s, true)}
       </div>
     </section>
   `;
@@ -657,9 +798,9 @@ function recordingsTable(s: Snapshot) {
   return `
     <div class="recording-table">
       <div class="recording-row head">
-        <span>Time</span><span>Audio</span><span>Trans TTFT</span><span>Interp TTFT</span><span>Transcript</span><span>Actions</span><span>Audio</span><span>Dataset</span>
+        <span>Time</span><span>Audio</span><span>Trans TTFT</span><span>Interp TTFT</span><span>Transcript</span><span>Actions</span><span>Audio</span><span>Feedback</span>
       </div>
-      ${s.recordings.slice(0, 8).map((r) => `
+      ${s.recordings.slice(0, 8).map((r, index) => `
         <div class="recording-row">
           <span>${new Date(r.ts).toLocaleTimeString()}</span>
           <span>${formatDuration(r.audio_duration_ms)}</span>
@@ -669,8 +810,7 @@ function recordingsTable(s: Snapshot) {
           <span>${esc(r.actions.map(actionLabel).join("; ")).slice(0, 140)}</span>
           <span><button class="mini" data-play-recording="${r.id}">Play</button></span>
           <span class="dataset-btns">
-            <button class="mini pos" data-save-correct="${r.id}" title="Save as correct example">+</button>
-            <button class="mini neg" data-save-wrong="${r.id}" title="Save as wrong example">−</button>
+            ${index === 0 ? `<button class="mini neg" data-save-wrong="${r.id}" title="Save wrong output">Wrong</button>` : ""}
           </span>
         </div>
         ${r.context ? (() => {
@@ -700,8 +840,8 @@ function recordingsTable(s: Snapshot) {
         ${pendingNegativeId === r.id ? `
           <div class="recording-row negative-input-row">
             <span class="negative-input-cell">
-              <label>Expected output:</label>
-              <input id="expected-answer-${r.id}" type="text" placeholder="type the correct output…" />
+              <label>Expected behavior/output:</label>
+              <input id="expected-answer-${r.id}" type="text" placeholder="type expected behavior/output..." />
               <button class="mini" data-save-wrong-confirm="${r.id}">Save</button>
               <button class="mini secondary" data-save-cancel>Cancel</button>
             </span>
@@ -991,8 +1131,28 @@ function modelDownloadFolderSection(s: Snapshot, setup: ModelSetupInfo | null) {
 }
 
 function imageDetailSection(s: Snapshot) {
+  const highImageTokens = s.settings.image_tokens >= 560;
+  const highImageResolution =
+    s.settings.image_width > 480 ||
+    s.settings.image_height > 270 ||
+    s.settings.image_width * s.settings.image_height > 480 * 270;
+  const imageWarnings = [
+    highImageTokens
+      ? "High image token budgets may crash llama.cpp unless your external/custom server launch sets a safe ubatch size, such as --ubatch-size 1024."
+      : "",
+    highImageResolution
+      ? "Large image resolutions can increase TTFT and may hit the same image-processing limits on some GPUs/models. Use lower resolution unless the extra visual detail is needed."
+      : ""
+  ].filter(Boolean);
+  const tokenLabels: Record<number, string> = {
+    70: "70 - fastest",
+    140: "140 - balanced",
+    280: "280 - detailed",
+    560: "560 - slow/high detail",
+    1120: "1120 - very slow/max detail",
+  };
   const tokenOptions = [70, 140, 280, 560, 1120]
-    .map((tokens) => `<option value="${tokens}" ${s.settings.image_tokens === tokens ? "selected" : ""}>${tokens}</option>`)
+    .map((tokens) => `<option value="${tokens}" ${s.settings.image_tokens === tokens ? "selected" : ""}>${tokenLabels[tokens]}</option>`)
     .join("");
   return `
     <section class="model-setup-section">
@@ -1018,8 +1178,10 @@ function imageDetailSection(s: Snapshot) {
         <label class="field">
           <span>Gemma 4 image tokens</span>
           <select data-setting="image_tokens">${tokenOptions}</select>
+          <small>Default is 140 for balanced image context. Higher values can require a manually tuned llama.cpp ubatch setting.</small>
         </label>
       </div>
+      ${imageWarnings.map((warning) => `<div class="setup-warning">${esc(warning)}</div>`).join("")}
     </section>
   `;
 }
@@ -1110,7 +1272,11 @@ function settingsView(s: Snapshot) {
     ["recent_context_max_items", "Recent context item cap", "number"],
     ["thinking_handoff_min_chars", "Thinking handoff min chars", "number"],
     ["thinking_handoff_reasoning_budget", "Thinking reasoning budget", "number"],
-    ["thinking_handoff_context_items", "Thinking context items", "number"]
+    ["thinking_handoff_context_items", "Thinking context items", "number"],
+    ["prompt_provider", "Prompt provider (local/custom)", "text"],
+    ["prompt_endpoint_url", "Prompt endpoint URL", "text"],
+    ["prompt_api_key", "Prompt API key", "password"],
+    ["prompt_model", "Prompt model", "text"]
   ];
   const advancedFields: Array<[keyof Settings, string, string]> = [
     ["server_url", "Server URL", "text"],
@@ -1128,6 +1294,7 @@ function settingsView(s: Snapshot) {
     ["dry_run", "Dry-run mode"],
     ["recent_context_enabled", "Recent context"],
     ["thinking_handoff_enabled", "Thinking handoff"],
+    ["prompt_auto_inject_keyboard", "Prompt keyboard auto-inject"],
     ["confirm_close_shortcuts", "Confirm close shortcuts"],
     ["kill_switch_enabled", "Kill switch"]
   ];
@@ -1176,6 +1343,8 @@ function settingsView(s: Snapshot) {
         </div>
       </details>
       <button data-cmd="save-settings">Save settings</button>
+      <button class="secondary" data-cmd="reset-llama">Reset llama.cpp backend</button>
+      ${settingsFeedback ? `<span class="settings-feedback">${esc(settingsFeedback)}</span>` : ""}
     </section>
   `;
 }
@@ -1198,7 +1367,10 @@ function audioInputSection(s: Snapshot) {
           <strong>Microphone</strong>
           <span>${esc(s.audio_running ? "Audio capture is running" : "Audio capture is stopped")}</span>
         </div>
-        <button class="secondary" data-cmd="refresh-audio-devices">Refresh devices</button>
+        <div class="row">
+          <button class="secondary" data-cmd="calibrate-audio">Calibrate mic</button>
+          <button class="secondary" data-cmd="refresh-audio-devices">Refresh devices</button>
+        </div>
       </div>
       <label class="field">
         <span>Input device</span>
@@ -1311,17 +1483,33 @@ function modelSetupView(s: Snapshot) {
   `;
 }
 
-function logs(s: Snapshot) {
+function logs(s: Snapshot, detailed = true) {
   return `
     <div class="logs">
       ${s.logs.length
-        ? s.logs.map((l) => `
-          <div class="log ${esc(l.level)}">
-            <time>${new Date(l.ts).toLocaleTimeString()}</time>
-            <strong>${esc(l.level)}</strong>
-            <span>${esc(l.message)}</span>
-          </div>
-        `).join("")
+        ? s.logs.map((l) => {
+          const full = l.message;
+          const short = full.length > 220 ? `${full.slice(0, 220)}...` : full;
+          if (detailed) {
+            return `
+              <details class="log ${esc(l.level)}" ${l.level === "error" ? "open" : ""}>
+                <summary>
+                  <time>${new Date(l.ts).toLocaleTimeString()}</time>
+                  <strong>${esc(l.level)}</strong>
+                  <span>${esc(short)}</span>
+                </summary>
+                <pre class="selectable">${esc(full)}</pre>
+              </details>
+            `;
+          }
+          return `
+            <div class="log ${esc(l.level)}">
+              <time>${new Date(l.ts).toLocaleTimeString()}</time>
+              <strong>${esc(l.level)}</strong>
+              <span>${esc(short)}</span>
+            </div>
+          `;
+        }).join("")
         : `<div class="muted">No log entries yet</div>`}
     </div>
   `;
@@ -1340,15 +1528,6 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-play-recording]").forEach((btn) => {
     btn.addEventListener("click", () => playRecording(Number(btn.dataset.playRecording)));
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-save-correct]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = Number(btn.dataset.saveCorrect);
-      try {
-        snapshot = await invoke("save_feedback_example", { correct: true, recordingId: id, expectedOutput: null });
-        showFeedbackToast("Saved as correct example");
-      } catch (error) { alert(String(error)); }
-    });
-  });
   document.querySelectorAll<HTMLButtonElement>("[data-save-wrong]").forEach((btn) => {
     btn.addEventListener("click", () => {
       pendingNegativeId = Number(btn.dataset.saveWrong);
@@ -1358,7 +1537,10 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-save-wrong-confirm]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = Number(btn.dataset.saveWrongConfirm);
-      const expected = (document.getElementById(`expected-answer-${id}`) as HTMLInputElement | null)?.value ?? "";
+      const expected =
+        (document.getElementById(`expected-answer-top-${id}`) as HTMLTextAreaElement | null)?.value ??
+        (document.getElementById(`expected-answer-${id}`) as HTMLInputElement | null)?.value ??
+        "";
       pendingNegativeId = null;
       try {
         snapshot = await invoke("save_feedback_example", { correct: false, recordingId: id, expectedOutput: expected || null });
@@ -1421,6 +1603,11 @@ async function runCommand(cmd: string) {
     if (cmd === "skip-calibration") next = await invoke("skip_calibration");
     if (cmd === "test-audio") next = await invoke("test_audio");
     if (cmd === "test-model") next = await invoke("test_model");
+    if (cmd === "reset-llama") {
+      showSettingsFeedback("Resetting llama.cpp backend...", true);
+      next = await invoke("reset_llama_backend");
+      showSettingsFeedback("llama.cpp backend reset complete");
+    }
     if (cmd === "test-injection") next = await invoke("test_injection");
     if (cmd === "open-dataset-folder") { await invoke("open_dataset_folder"); return; }
     if (cmd === "open-models-folder") { await invoke("open_models_folder"); return; }
@@ -1429,8 +1616,7 @@ async function runCommand(cmd: string) {
       return;
     }
     if (cmd === "refresh-audio-devices") {
-      await refreshAudioInputDevices();
-      render();
+      await refreshAudioInputDevices(true);
       return;
     }
     if (cmd === "dismiss-model-setup") {
@@ -1443,7 +1629,9 @@ async function runCommand(cmd: string) {
       next = await invoke("test_parsing", { input: parserInput });
     }
     if (cmd === "save-settings" && snapshot) {
+      showSettingsFeedback("Saving settings...", true);
       next = await invoke("save_settings_cmd", { settings: collectSettings(snapshot.settings) });
+      showSettingsFeedback("Settings saved");
     }
     if (next) {
       snapshot = next;
@@ -1451,13 +1639,16 @@ async function runCommand(cmd: string) {
     }
   } catch (error) {
     console.error(error);
+    if (cmd === "save-settings" || cmd === "reset-llama") {
+      showSettingsFeedback(`Failed: ${String(error)}`, true);
+    }
     alert(String(error));
   }
 }
 
-async function refreshModelSetup() {
+async function refreshModelSetup(shouldRender = true) {
   modelSetupLoading = true;
-  render();
+  if (shouldRender) render();
   try {
     modelSetup = await invoke<ModelSetupInfo>("get_model_setup_info");
   } catch (error) {
@@ -1465,17 +1656,18 @@ async function refreshModelSetup() {
     alert(String(error));
   } finally {
     modelSetupLoading = false;
-    render();
+    if (shouldRender) render();
   }
 }
 
-async function refreshAudioInputDevices() {
+async function refreshAudioInputDevices(shouldRender = false) {
   try {
     audioInputDevices = await invoke<AudioInputDevice[]>("list_audio_input_devices");
   } catch (error) {
     console.error(error);
     audioInputDevices = [];
   }
+  if (shouldRender) render();
 }
 
 async function downloadModel(index: number) {
@@ -1533,6 +1725,34 @@ async function selectLocalModelPath(path: string) {
 
 async function runOverlayCommand(cmd: string) {
   try {
+    if (cmd === "prompt-collapse") {
+      snapshot = await invoke("set_prompt_panel_collapsed", { collapsed: true });
+      return;
+    }
+    if (cmd === "prompt-expand") {
+      snapshot = await invoke("set_prompt_panel_collapsed", { collapsed: false });
+      return;
+    }
+    if (cmd === "prompt-dismiss") {
+      snapshot = await invoke("dismiss_prompt_panel");
+      return;
+    }
+    if (cmd === "copy-prompt-result") {
+      const text = document.querySelector<HTMLTextAreaElement>("#prompt-result-text")?.value ?? "";
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    if (cmd === "save-wrong-feedback") {
+      const panel = overlayState.prompt_panel;
+      if (!panel?.recording_id) return;
+      const expected = (document.getElementById(`expected-answer-${panel.recording_id}`) as HTMLTextAreaElement | null)?.value ?? "";
+      snapshot = await invoke("save_feedback_example", {
+        correct: false,
+        recordingId: panel.recording_id,
+        expectedOutput: expected || null
+      });
+      return;
+    }
     if (cmd === "deny") {
       snapshot = await invoke("deny_pending");
     }
@@ -1582,6 +1802,11 @@ async function boot() {
   if (isOverlay) {
     snapshot = await invoke("get_status");
     renderOverlay();
+    window.addEventListener("blur", () => {
+      if (overlayState.state === "prompt-panel" && overlayState.prompt_panel && !overlayState.prompt_panel.collapsed) {
+        invoke("set_prompt_panel_collapsed", { collapsed: true }).catch(() => {});
+      }
+    });
     await listen<OverlayState>("overlay-state", (event) => {
       overlayState = event.payload;
       renderOverlay();
@@ -1592,19 +1817,24 @@ async function boot() {
     return;
   }
   snapshot = await invoke("get_status");
-  await refreshAudioInputDevices();
-  await refreshModelSetup();
-  if (modelSetup && !modelSetup.model_present) {
-    activeTab = "settings";
-  }
   render();
+  const initialTab = activeTab;
+  Promise.allSettled([refreshAudioInputDevices(false), refreshModelSetup(false)]).then(() => {
+    if (modelSetup && !modelSetup.model_present && activeTab === initialTab) {
+      activeTab = "settings";
+    }
+    render();
+  });
   await listen<Snapshot>("status", (event) => {
+    const previousLatestRecordingId = snapshot?.recordings[0]?.id ?? null;
     snapshot = event.payload;
-    // Don't rebuild while user is editing — destroys focus mid-edit
-    if (activeTab === "settings") return;
+    const latestRecordingId = snapshot.recordings[0]?.id ?? null;
+    const hasNewRecording = latestRecordingId !== null && latestRecordingId !== previousLatestRecordingId;
+    // Don't rebuild while user is editing; new feedback should still appear after an injection.
+    if (activeTab === "settings" && !hasNewRecording) return;
     if (pendingNegativeId !== null) return;
     if (isEditingModelSetupField()) return;
-    render();
+    scheduleRender(80);
   });
   await listen<boolean>("recording-overlay", (event) => {
     overlay = event.payload;
@@ -1643,3 +1873,4 @@ async function boot() {
 boot().catch((error) => {
   app.innerHTML = `<main class="shell"><section class="panel">Failed to start UI: ${esc(String(error))}</section></main>`;
 });
+

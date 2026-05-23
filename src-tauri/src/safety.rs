@@ -20,6 +20,7 @@ pub fn evaluate(actions: &[Action], settings: &Settings) -> SafetyDecision {
         .map(|action| match action {
             Action::Text { value } => value.chars().count(),
             Action::Shortcut { .. } => 0,
+            Action::Prompt | Action::Agentic => 0,
         })
         .sum();
     if text_chars >= settings.confirm_large_text_chars {

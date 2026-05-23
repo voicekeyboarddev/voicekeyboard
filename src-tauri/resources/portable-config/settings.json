@@ -25,7 +25,7 @@
     "always_send_low_res_image":  false,
     "image_width":  160,
     "image_height":  100,
-    "image_tokens":  70,
+    "image_tokens":  140,
     "context_length_tokens":  4096,
     "log_retention_bytes":  5242880,
     "common_terms":  "",
@@ -37,5 +37,10 @@
     "thinking_handoff_enabled":  true,
     "thinking_handoff_min_chars":  250,
     "thinking_handoff_reasoning_budget":  64,
-    "thinking_handoff_context_items":  3
+    "thinking_handoff_context_items":  3,
+    "prompt_provider":  "local",
+    "prompt_endpoint_url":  "",
+    "prompt_api_key":  "",
+    "prompt_model":  "gpt-4.1",
+    "prompt_auto_inject_keyboard":  true
 }

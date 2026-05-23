@@ -1,4 +1,4 @@
-﻿mod audio;
+mod audio;
 mod clipboard;
 mod context;
 mod gesture;
@@ -21,8 +21,8 @@ use crate::{
     safety::SafetyTier,
     settings::Settings,
     types::{
-        Action, DiagnosticLogFile, FocusedTextContext, ModelInputSnapshot, RecordingEntry,
-        RequestLog, StatusSnapshot, WindowContext,
+        Action, DiagnosticLogFile, FocusedTextContext, ModelInputSnapshot, PromptPanelKind,
+        PromptPanelState, RecordingEntry, RequestLog, StatusSnapshot, WindowContext,
     },
 };
 use base64::{engine::general_purpose, Engine as _};
@@ -70,6 +70,7 @@ struct RuntimeState {
     recordings: VecDeque<RecordingEntry>,
     pending_feedback_recording: Option<RecordingEntry>,
     feedback_candidate: Option<FeedbackCandidate>,
+    prompt_panel: Option<PromptPanelState>,
     next_recording_id: u64,
     metrics: types::SystemMetrics,
     measured_first_request: bool,
@@ -89,6 +90,7 @@ impl Default for RuntimeState {
             recordings: VecDeque::new(),
             pending_feedback_recording: None,
             feedback_candidate: None,
+            prompt_panel: None,
             next_recording_id: 1,
             metrics: types::SystemMetrics::default(),
             measured_first_request: false,
@@ -170,6 +172,7 @@ impl AppCore {
             request_logs: state.request_logs.iter().cloned().collect(),
             model_inputs: state.model_inputs.iter().cloned().collect(),
             recordings: state.recordings.iter().cloned().collect(),
+            prompt_panel: state.prompt_panel.clone(),
             metrics: state.metrics.clone(),
             settings: self.settings.lock().clone(),
         }
@@ -179,6 +182,24 @@ impl AppCore {
         if let Some(app) = self.app.lock().as_ref() {
             let _ = app.emit("status", self.snapshot());
         }
+    }
+
+    fn set_prompt_panel(&self, panel: Option<PromptPanelState>) {
+        let has_panel = panel.is_some();
+        self.state.lock().prompt_panel = panel;
+        self.emit_snapshot();
+        self.update_overlay(if has_panel { "prompt-panel" } else { "idle" }, None);
+    }
+
+    fn mutate_prompt_panel(&self, update: impl FnOnce(&mut PromptPanelState)) {
+        {
+            let mut state = self.state.lock();
+            if let Some(panel) = state.prompt_panel.as_mut() {
+                update(panel);
+            }
+        }
+        self.emit_snapshot();
+        self.update_overlay("prompt-panel", None);
     }
 
     fn set_status(&self, status: impl Into<String>) {
@@ -471,7 +492,12 @@ impl AppCore {
             if !settings.context_enabled {
                 return None;
             }
-            context::window_context_at_point_with_settings(x, y, &settings)
+            let context = context::window_context_at_point_with_settings(x, y, &settings);
+            if is_voice_keyboard_window(context.as_ref()) {
+                core_for_capture.update_overlay("idle", None);
+                return None;
+            }
+            context
         });
         self.gesture_hook.start(tx, capture)?;
         self.log("info", "global mouse/keyboard hook enabled");
@@ -571,6 +597,17 @@ impl AppCore {
         y: f64,
         prefetched_context: Option<WindowContext>,
     ) {
+        if is_voice_keyboard_window(prefetched_context.as_ref())
+            || context::active_window_context()
+                .as_ref()
+                .is_some_and(|context| is_voice_keyboard_window(Some(context)))
+        {
+            self.gesture.lock().take();
+            self.update_overlay("idle", None);
+            self.log("debug", "ignored mouse press inside Voice Keyboard UI");
+            return;
+        }
+
         // Double-click anywhere abort: two presses (any button) within 400 ms while the
         // model is busy = bail out. Mirrors the right-click abort but fires for left-click
         // double-clicks too, so users can interrupt regardless of which button they prefer.
@@ -715,24 +752,24 @@ impl AppCore {
                     let button = session.button;
                     drop(gesture);
                     core.set_status("listening");
+                    core.update_overlay("recording", None);
                     // Keep the target app focused while the mouse is down. In terminals,
                     // showing an overlay can cancel drag selection.
                     let clipboard_core = Arc::clone(&core);
                     std::thread::spawn(move || {
-                        let skip_clipboard_probe = clipboard_core
+                        let probe_skip_reason = clipboard_core
                             .gesture
                             .lock()
                             .as_ref()
                             .and_then(|session| {
                                 (session.start == start)
-                                    .then(|| terminal_context_kind(session.context.as_ref()))
+                                    .then(|| clipboard_probe_skip_reason(session.context.as_ref()))
                             })
-                            .flatten()
-                            .is_some();
-                        if skip_clipboard_probe {
+                            .flatten();
+                        if let Some(reason) = probe_skip_reason {
                             clipboard_core.log(
                                 "debug",
-                                "skipped clipboard selection probe in terminal context",
+                                format!("skipped clipboard selection probe: {reason}"),
                             );
                             return;
                         }
@@ -902,7 +939,7 @@ impl AppCore {
             Ok(response) => response,
             Err(err) => {
                 self.set_status("error");
-                self.update_overlay("error", Some(format!("Transcription failed: {err}")));
+                self.update_overlay("error", Some(short_overlay_error("Transcription failed")));
                 self.push_request_log(RequestLog {
                     ts: Utc::now().to_rfc3339(),
                     stage: "transcription".to_string(),
@@ -1055,34 +1092,34 @@ impl AppCore {
         };
         if model_was_called {
             if let Ok(interpreted) = interpreted_result.as_ref() {
-            self.push_model_input(ModelInputSnapshot {
-                ts: Utc::now().to_rfc3339(),
-                stage: interpretation_mode.stage_name().to_string(),
-                endpoint: format!(
-                    "{}/v1/chat/completions",
-                    settings.server_url.trim_end_matches('/')
-                ),
-                prompt: if interpreted.prompt.is_empty() {
-                    interpretation_prompt
-                } else {
-                    interpreted.prompt.clone()
-                },
-                image_attached: interpreted.image_attached,
-                reasoning_mode: Some(if interpretation_mode == InterpretationMode::Thinking {
-                    "on".to_string()
-                } else {
-                    "off".to_string()
-                }),
-                reasoning_budget: if interpretation_mode == InterpretationMode::Thinking {
-                    Some(settings.thinking_handoff_reasoning_budget)
-                } else {
-                    None
-                },
-                context: context.clone(),
-                audio_path: None,
-                audio_duration_ms: None,
-                audio_format: None,
-            });
+                self.push_model_input(ModelInputSnapshot {
+                    ts: Utc::now().to_rfc3339(),
+                    stage: interpretation_mode.stage_name().to_string(),
+                    endpoint: format!(
+                        "{}/v1/chat/completions",
+                        settings.server_url.trim_end_matches('/')
+                    ),
+                    prompt: if interpreted.prompt.is_empty() {
+                        interpretation_prompt
+                    } else {
+                        interpreted.prompt.clone()
+                    },
+                    image_attached: interpreted.image_attached,
+                    reasoning_mode: Some(if interpretation_mode == InterpretationMode::Thinking {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    }),
+                    reasoning_budget: if interpretation_mode == InterpretationMode::Thinking {
+                        Some(settings.thinking_handoff_reasoning_budget)
+                    } else {
+                        None
+                    },
+                    context: context.clone(),
+                    audio_path: None,
+                    audio_duration_ms: None,
+                    audio_format: None,
+                });
             }
         }
         let (interpreted_result, interpretation_ok) = match interpreted_result {
@@ -1101,9 +1138,7 @@ impl AppCore {
                     self.set_status("error");
                     self.update_overlay(
                         "error",
-                        Some(format!(
-                            "Model context exceeded. Increase Model context tokens in Settings or reduce captured context. {err}"
-                        )),
+                        Some(short_overlay_error("Model context exceeded")),
                     );
                     self.push_request_log(RequestLog {
                         ts: Utc::now().to_rfc3339(),
@@ -1182,10 +1217,42 @@ impl AppCore {
             interpretation_total_ms: interpreted_response.total_ms,
             context: context.clone(),
         });
-        self.state.lock().pending_feedback_recording = Some(recording);
+        self.state.lock().pending_feedback_recording = Some(recording.clone());
         self.emit_snapshot();
 
-        let decision = safety::evaluate(&parsed.actions, &settings);
+        if parsed.actions.len() == 1 && matches!(parsed.actions[0], Action::Prompt) {
+            self.clone()
+                .handle_prompt_handoff(
+                    transcript,
+                    interpreted,
+                    audio_duration_ms,
+                    wav_path,
+                    context,
+                    replacement_context,
+                    recent_context,
+                    recording.id,
+                    settings,
+                )
+                .await;
+            return;
+        }
+
+        if parsed.actions.len() == 1 && matches!(parsed.actions[0], Action::Agentic) {
+            self.show_agentic_placeholder(recording.id, transcript, interpreted);
+            self.state.lock().pending_feedback_recording = None;
+            self.set_status("ready");
+            return;
+        }
+
+        let decision = if copy_shortcut_needs_confirmation(&parsed.actions, context.as_ref()) {
+            safety::SafetyDecision {
+                tier: SafetyTier::Confirm,
+                reason: "copy shortcut in a non-text context without readable selected text"
+                    .to_string(),
+            }
+        } else {
+            safety::evaluate(&parsed.actions, &settings)
+        };
         match decision.tier {
             SafetyTier::Block => {
                 self.state.lock().pending_feedback_recording = None;
@@ -1231,6 +1298,173 @@ impl AppCore {
             .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_prompt_handoff(
+        self: Arc<Self>,
+        transcript: String,
+        source_output: String,
+        audio_duration_ms: u64,
+        wav_path: PathBuf,
+        context: Option<WindowContext>,
+        replacement_context: Option<FocusedTextContext>,
+        recent_context: Vec<RecentTextContext>,
+        recording_id: u64,
+        settings: Settings,
+    ) {
+        self.set_status("specialized-agent");
+        self.set_prompt_panel(Some(PromptPanelState {
+            kind: PromptPanelKind::Prompt,
+            state: "streaming".to_string(),
+            title: "Prompt handoff".to_string(),
+            transcript: transcript.clone(),
+            source_output: source_output.clone(),
+            text: String::new(),
+            delivery: None,
+            recording_id: Some(recording_id),
+            can_insert: false,
+            can_save_wrong: false,
+            collapsed: false,
+            error: None,
+        }));
+        self.log("info", "prompt handoff started");
+        let prompt_provider = settings.prompt_provider.trim().to_ascii_lowercase();
+        let use_custom_prompt = prompt_provider == "custom" || prompt_provider == "openai";
+        let prompt_endpoint = if use_custom_prompt && !settings.prompt_endpoint_url.trim().is_empty()
+        {
+            format!(
+                "{}/v1/chat/completions",
+                settings.prompt_endpoint_url.trim_end_matches('/')
+            )
+        } else {
+            format!("{}/v1/chat/completions", settings.server_url.trim_end_matches('/'))
+        };
+        self.push_model_input(ModelInputSnapshot {
+            ts: Utc::now().to_rfc3339(),
+            stage: "prompt-handoff".to_string(),
+            endpoint: prompt_endpoint,
+            prompt: model::prompt_handoff_prompt(&transcript, context.as_ref(), &recent_context),
+            image_attached: context
+                .as_ref()
+                .and_then(|ctx| ctx.cursor_screenshot.as_ref())
+                .is_some(),
+            reasoning_mode: Some(if use_custom_prompt { "provider".to_string() } else { "on".to_string() }),
+            reasoning_budget: if use_custom_prompt {
+                None
+            } else {
+                Some(settings.thinking_handoff_reasoning_budget)
+            },
+            context: context.clone(),
+            audio_path: Some(wav_path.to_string_lossy().to_string()),
+            audio_duration_ms: Some(audio_duration_ms),
+            audio_format: Some("wav 16kHz mono pcm_s16le".to_string()),
+        });
+
+        let stream_core = self.clone();
+        let response = self
+            .model
+            .prompt_handoff(
+                &settings,
+                &transcript,
+                context.as_ref(),
+                Some(&wav_path),
+                &recent_context,
+                move |chunk| {
+                    stream_core.mutate_prompt_panel(|panel| {
+                        panel.text.push_str(chunk);
+                    });
+                    Ok(())
+                },
+            )
+            .await;
+
+        match response {
+            Ok(result) => {
+                if result.used_media_fallback {
+                    self.log("warn", "prompt handoff retried without audio/image media");
+                }
+                self.push_request_log(RequestLog {
+                    ts: Utc::now().to_rfc3339(),
+                    stage: "prompt-handoff".to_string(),
+                    ok: true,
+                    transcript: transcript.clone(),
+                    output: result.text.clone(),
+                    ttft_ms: result.response.ttft_ms,
+                    tokens_per_second: result.response.tokens_per_second,
+                    total_ms: result.response.total_ms,
+                });
+                self.mutate_prompt_panel(|panel| {
+                    panel.state = "done".to_string();
+                    panel.text = result.text.clone();
+                    panel.delivery = Some(result.delivery.clone());
+                    panel.can_insert = result.delivery == "keyboard";
+                });
+
+                if result.delivery == "keyboard" && settings.prompt_auto_inject_keyboard {
+                    if target_still_focused(context.as_ref()) {
+                        self.inject_actions_with_context(
+                            vec![Action::Text {
+                                value: result.text.clone(),
+                            }],
+                            settings,
+                            replacement_context,
+                        )
+                        .await;
+                    } else {
+                        self.mutate_prompt_panel(|panel| {
+                            panel.title = "Prompt result - focus changed".to_string();
+                            panel.can_insert = false;
+                            panel.can_save_wrong = true;
+                            panel.error = Some(
+                                "Target focus changed, so the result was not typed.".to_string(),
+                            );
+                        });
+                        self.state.lock().pending_feedback_recording = None;
+                        self.set_status("ready");
+                    }
+                } else {
+                    self.state.lock().pending_feedback_recording = None;
+                    self.set_status("ready");
+                }
+            }
+            Err(err) => {
+                self.push_request_log(RequestLog {
+                    ts: Utc::now().to_rfc3339(),
+                    stage: "prompt-handoff".to_string(),
+                    ok: false,
+                    transcript,
+                    output: err.to_string(),
+                    ttft_ms: None,
+                    tokens_per_second: None,
+                    total_ms: None,
+                });
+                self.mutate_prompt_panel(|panel| {
+                    panel.state = "error".to_string();
+                    panel.title = "Prompt handoff failed".to_string();
+                    panel.error = Some(err.to_string());
+                });
+                self.state.lock().pending_feedback_recording = None;
+                self.set_status("error");
+            }
+        }
+    }
+
+    fn show_agentic_placeholder(&self, recording_id: u64, transcript: String, source_output: String) {
+        self.set_prompt_panel(Some(PromptPanelState {
+            kind: PromptPanelKind::Agentic,
+            state: "placeholder".to_string(),
+            title: "Agentic mode requested".to_string(),
+            transcript,
+            source_output,
+            text: "Agentic mode is not implemented yet. The request was captured, but no clipboard, coding, filesystem, notes, or computer-use action was run.".to_string(),
+            delivery: Some("ui".to_string()),
+            recording_id: Some(recording_id),
+            can_insert: false,
+            can_save_wrong: true,
+            collapsed: false,
+            error: None,
+        }));
+    }
+
     async fn inject_actions_with_context(
         &self,
         actions: Vec<Action>,
@@ -1268,22 +1502,27 @@ impl AppCore {
         match result {
             Ok(Ok((actions, replaced_selection))) => {
                 let current_window = self.state.lock().current_window.clone();
-                {
+                let saved_recording = {
                     let mut state = self.state.lock();
                     if let Some(recording) = state.pending_feedback_recording.take() {
                         let model_inputs = state.model_inputs.iter().cloned().collect();
+                        let saved_recording = recording.clone();
                         state.feedback_candidate = Some(FeedbackCandidate {
                             recording,
                             model_inputs,
-                            window: current_window,
+                            window: current_window.clone(),
                         });
+                        Some(saved_recording)
+                    } else {
+                        None
                     }
-                }
+                };
                 self.set_status("ready");
                 self.update_overlay(
                     "done",
                     Some(format!("Injected {} action(s)", actions.len())),
                 );
+                let _ = saved_recording;
                 if replaced_selection {
                     logger.log(
                         "info",
@@ -1296,18 +1535,22 @@ impl AppCore {
                 } else {
                     logger.log(
                         "info",
-                        format!("injected {} action(s): {}", actions.len(), action_summary(&actions)),
+                        format!(
+                            "injected {} action(s): {}",
+                            actions.len(),
+                            action_summary(&actions)
+                        ),
                     );
                 }
             }
             Ok(Err(err)) => {
                 self.set_status("error");
-                self.update_overlay("error", Some(format!("Injection failed: {err}")));
+                self.update_overlay("error", Some(short_overlay_error("Injection failed")));
                 logger.log("error", format!("injection failed: {err}"));
             }
             Err(err) => {
                 self.set_status("error");
-                self.update_overlay("error", Some(format!("Injection task failed: {err}")));
+                self.update_overlay("error", Some(short_overlay_error("Injection task failed")));
                 logger.log("error", format!("injection task failed: {err}"));
             }
         }
@@ -1332,15 +1575,16 @@ impl AppCore {
                     "text": text.unwrap_or_default(),
                     "transcript": transcript,
                     "pending_text": pending_text,
+                    "prompt_panel": self.state.lock().prompt_panel.clone(),
                 });
                 let (width, height) = overlay_dimensions(state);
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                let _ = window.set_ignore_cursor_events(state != "confirm");
+                let _ = window.set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel"));
                 let _ = app.emit_to("overlay", "overlay-state", payload);
                 match state {
-                    "idle" => {
-                        let _ = window.hide();
-                    }
+                    "idle" if self.state.lock().prompt_panel.is_none() => {
+                            let _ = window.hide();
+                        }
                     _ => {
                         position_overlay(app);
                         let _ = window.show();
@@ -1405,12 +1649,23 @@ fn trigger_button_down(button: TriggerButton) -> bool {
     }
 }
 
+fn target_still_focused(target: Option<&WindowContext>) -> bool {
+    let Some(target) = target else {
+        return true;
+    };
+    let Some(now) = context::active_window_context() else {
+        return false;
+    };
+    now.app_name == target.app_name && now.title == target.title
+}
+
 fn text_from_actions(actions: &[Action]) -> String {
     actions
         .iter()
         .filter_map(|action| match action {
             Action::Text { value } => Some(value.as_str()),
             Action::Shortcut { .. } => None,
+            Action::Prompt | Action::Agentic => None,
         })
         .collect::<Vec<_>>()
         .join("")
@@ -1424,6 +1679,8 @@ fn action_summary(actions: &[Action]) -> String {
                 format!("text({:?})", clip_log_text(value, 120))
             }
             Action::Shortcut { keys } => format!("shortcut({})", keys.join("+")),
+            Action::Prompt => "prompt-handoff".to_string(),
+            Action::Agentic => "agentic-handoff".to_string(),
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1472,23 +1729,26 @@ fn capture_selection_with_clipboard_probe(core: &Arc<AppCore>, start: Instant) {
         focused_text: None,
         cursor_screenshot: None,
     });
-    let mut ft = ctx.focused_text.clone().unwrap_or_else(|| FocusedTextContext {
-        source: "clipboard probe".to_string(),
-        element_name: None,
-        control_type: None,
-        class_name: None,
-        automation_id: None,
-        parent_name: None,
-        parent_class: None,
-        parent_control_type: None,
-        text_before_cursor: None,
-        selected_text: None,
-        text_after_cursor: None,
-        full_text: None,
-        truncated: false,
-        cursor_known: false,
-        element_bounds: None,
-    });
+    let mut ft = ctx
+        .focused_text
+        .clone()
+        .unwrap_or_else(|| FocusedTextContext {
+            source: "clipboard probe".to_string(),
+            element_name: None,
+            control_type: None,
+            class_name: None,
+            automation_id: None,
+            parent_name: None,
+            parent_class: None,
+            parent_control_type: None,
+            text_before_cursor: None,
+            selected_text: None,
+            text_after_cursor: None,
+            full_text: None,
+            truncated: false,
+            cursor_known: false,
+            element_bounds: None,
+        });
     let already_has_selection = ft
         .selected_text
         .as_ref()
@@ -1513,6 +1773,10 @@ fn capture_selection_with_clipboard_probe(core: &Arc<AppCore>, start: Instant) {
     );
 }
 
+fn short_overlay_error(prefix: &str) -> String {
+    format!("{prefix}. See Diagnostics for details.")
+}
+
 fn is_context_length_error(err: &anyhow::Error) -> bool {
     let text = err.to_string().to_ascii_lowercase();
     text.contains("exceeds the available context size")
@@ -1527,6 +1791,130 @@ fn context_has_selection(context: Option<&WindowContext>) -> bool {
         .and_then(|text| text.selected_text.as_ref())
         .map(|text| !text.trim().is_empty())
         .unwrap_or(false)
+}
+
+fn copy_shortcut_needs_confirmation(actions: &[Action], context: Option<&WindowContext>) -> bool {
+    actions.iter().any(is_copy_shortcut)
+        && !context_has_selection(context)
+        && !is_text_capable_context(context)
+}
+
+fn is_copy_shortcut(action: &Action) -> bool {
+    let Action::Shortcut { keys } = action else {
+        return false;
+    };
+    let normalized = keys
+        .iter()
+        .map(|key| key.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    normalized
+        .iter()
+        .any(|key| matches!(key.as_str(), "ctrl" | "control"))
+        && normalized.iter().any(|key| key == "c")
+}
+
+fn clipboard_probe_skip_reason(context: Option<&WindowContext>) -> Option<String> {
+    let Some(ctx) = context else {
+        return Some("no foreground context".to_string());
+    };
+    if terminal_context_kind(Some(ctx)).is_some() {
+        return Some(format!("terminal context ({})", app_context_label(ctx)));
+    }
+    if is_canvas_or_non_text_app(ctx) {
+        return Some(format!("non-text/canvas app ({})", app_context_label(ctx)));
+    }
+    if is_text_capable_context(Some(ctx)) {
+        return None;
+    }
+    Some(format!(
+        "focused control is not text-capable ({})",
+        app_context_label(ctx)
+    ))
+}
+
+fn is_text_capable_context(context: Option<&WindowContext>) -> bool {
+    let Some(ctx) = context else {
+        return false;
+    };
+    let app = ctx.app_name.to_ascii_lowercase();
+    let title = ctx.title.to_ascii_lowercase();
+    if is_canvas_or_non_text_app(ctx) || terminal_context_kind(Some(ctx)).is_some() {
+        return false;
+    }
+    if [
+        "chrome", "msedge", "firefox", "brave", "notepad", "code.exe", "winword", "excel",
+        "powerpnt", "outlook", "onenote", "wordpad",
+    ]
+    .iter()
+    .any(|needle| app.contains(needle) || title.contains(needle))
+    {
+        return true;
+    }
+    let Some(text) = ctx.focused_text.as_ref() else {
+        return false;
+    };
+    let haystack = [
+        text.source.as_str(),
+        text.control_type.as_deref().unwrap_or(""),
+        text.class_name.as_deref().unwrap_or(""),
+        text.automation_id.as_deref().unwrap_or(""),
+        text.element_name.as_deref().unwrap_or(""),
+        text.parent_control_type.as_deref().unwrap_or(""),
+        text.parent_class.as_deref().unwrap_or(""),
+        text.parent_name.as_deref().unwrap_or(""),
+    ]
+    .join(" ")
+    .to_ascii_lowercase();
+    [
+        "edit",
+        "document",
+        "text",
+        "value",
+        "textarea",
+        "rich edit",
+        "contenteditable",
+        "omnibox",
+        "urlbar",
+        "search",
+    ]
+    .iter()
+    .any(|needle| haystack.contains(needle))
+}
+
+fn is_canvas_or_non_text_app(ctx: &WindowContext) -> bool {
+    let app = ctx.app_name.to_ascii_lowercase();
+    let title = ctx.title.to_ascii_lowercase();
+    [
+        "mspaint",
+        "paint",
+        "photoshop",
+        "illustrator",
+        "blender",
+        "krita",
+        "gimp",
+    ]
+    .iter()
+    .any(|needle| app.contains(needle) || title.contains(needle))
+}
+
+fn app_context_label(ctx: &WindowContext) -> String {
+    if ctx.title.trim().is_empty() {
+        ctx.app_name.clone()
+    } else {
+        format!("{} / {}", ctx.app_name, ctx.title)
+    }
+}
+
+fn is_voice_keyboard_window(context: Option<&WindowContext>) -> bool {
+    let Some(ctx) = context else {
+        return false;
+    };
+    let app = ctx.app_name.to_ascii_lowercase();
+    let title = ctx.title.to_ascii_lowercase();
+    app.contains("voice-keyboard")
+        || app.contains("voice_keyboard")
+        || title == "voice keyboard"
+        || title.contains("local llm voice keyboard")
 }
 
 fn normalize_transcript_for_interpretation(
@@ -1655,8 +2043,18 @@ fn shortcut_override(lowered: &str) -> Option<String> {
         "find" | "search this page" | "control f" | "ctrl f" => "{{Ctrl+F}}",
         "new tab" | "control t" | "ctrl t" => "{{Ctrl+T}}",
         "close tab" | "control w" | "ctrl w" => "{{Ctrl+W}}",
-        "enter" | "press enter" | "hit enter" | "submit" | "go" | "return" | "and enter"
-        | "an enter" => "{{Enter}}",
+        "enter"
+        | "press enter"
+        | "hit enter"
+        | "submit"
+        | "go"
+        | "return"
+        | "and enter"
+        | "an enter"
+        | "shortcut enter"
+        | "enter key"
+        | "press enter key"
+        | "press the enter key" => "{{Enter}}",
         "tab" | "press tab" => "{{Tab}}",
         "escape" | "esc" | "press escape" => "{{Escape}}",
         "backspace" | "press backspace" => "{{Backspace}}",
@@ -2054,6 +2452,84 @@ mod tests {
             "{{Enter}}thank you for your help".to_string()
         );
     }
+
+    #[test]
+    fn clipboard_probe_skips_paint_and_terminals() {
+        let paint = WindowContext {
+            title: "Untitled - Paint".to_string(),
+            app_name: "mspaint.exe".to_string(),
+            cursor_x: 0,
+            cursor_y: 0,
+            focused_text: None,
+            cursor_screenshot: None,
+        };
+        assert!(clipboard_probe_skip_reason(Some(&paint))
+            .unwrap()
+            .contains("non-text"));
+
+        let terminal = WindowContext {
+            title: "Command Prompt".to_string(),
+            app_name: "cmd.exe".to_string(),
+            cursor_x: 0,
+            cursor_y: 0,
+            focused_text: None,
+            cursor_screenshot: None,
+        };
+        assert!(clipboard_probe_skip_reason(Some(&terminal))
+            .unwrap()
+            .contains("terminal"));
+    }
+
+    #[test]
+    fn clipboard_probe_allows_text_context() {
+        let context = selected_context("");
+        assert!(clipboard_probe_skip_reason(Some(&context)).is_none());
+    }
+
+    #[test]
+    fn copy_shortcut_confirms_in_non_text_without_selection() {
+        let paint = WindowContext {
+            title: "Untitled - Paint".to_string(),
+            app_name: "mspaint.exe".to_string(),
+            cursor_x: 0,
+            cursor_y: 0,
+            focused_text: None,
+            cursor_screenshot: None,
+        };
+        let actions = vec![Action::Shortcut {
+            keys: vec!["Ctrl".to_string(), "C".to_string()],
+        }];
+        assert!(copy_shortcut_needs_confirmation(&actions, Some(&paint)));
+        assert!(!copy_shortcut_needs_confirmation(
+            &actions,
+            Some(&selected_context("hello"))
+        ));
+    }
+
+    #[test]
+    fn ignores_own_ui_for_gestures() {
+        let context = WindowContext {
+            title: "Voice Keyboard".to_string(),
+            app_name: "voice-keyboard.exe".to_string(),
+            cursor_x: 0,
+            cursor_y: 0,
+            focused_text: None,
+            cursor_screenshot: None,
+        };
+        assert!(is_voice_keyboard_window(Some(&context)));
+    }
+
+    #[test]
+    fn enter_shortcut_variants_are_direct() {
+        assert_eq!(
+            direct_interpretation_override("shortcut enter", None),
+            Some("{{Enter}}".to_string())
+        );
+        assert_eq!(
+            direct_interpretation_override("press the enter key", None),
+            Some("{{Enter}}".to_string())
+        );
+    }
 }
 
 fn looks_like_navigation_transcript(text: &str) -> bool {
@@ -2191,6 +2667,8 @@ fn replace_text_actions(actions: Vec<Action>, replacement: String) -> Vec<Action
 fn overlay_dimensions(state: &str) -> (f64, f64) {
     if state == "confirm" {
         (430.0, 214.0)
+    } else if state == "prompt-panel" {
+        (620.0, 330.0)
     } else {
         (360.0, 96.0)
     }
@@ -2360,7 +2838,24 @@ fn save_feedback_example(
     };
     core.save_feedback(label, recording_id, expected_output)
         .map_err(|e| e.to_string())?;
+    if !correct {
+        core.set_prompt_panel(None);
+    }
     Ok(core.snapshot())
+}
+
+#[tauri::command]
+fn set_prompt_panel_collapsed(core: tauri::State<'_, Arc<AppCore>>, collapsed: bool) -> StatusSnapshot {
+    core.mutate_prompt_panel(|panel| {
+        panel.collapsed = collapsed;
+    });
+    core.snapshot()
+}
+
+#[tauri::command]
+fn dismiss_prompt_panel(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
+    core.set_prompt_panel(None);
+    core.snapshot()
 }
 
 #[tauri::command]
@@ -2544,6 +3039,40 @@ async fn test_model(core: tauri::State<'_, Arc<AppCore>>) -> Result<StatusSnapsh
 }
 
 #[tauri::command]
+async fn reset_llama_backend(
+    core: tauri::State<'_, Arc<AppCore>>,
+) -> Result<StatusSnapshot, String> {
+    let settings = core.settings.lock().clone();
+    if !settings.managed_server {
+        core.log(
+            "warn",
+            "reset llama.cpp backend requested, but app-managed server is disabled",
+        );
+        return Err("Reset is only available when App-managed llama.cpp is enabled".to_string());
+    }
+    core.set_status("warming");
+    core.update_overlay(
+        "processing",
+        Some("Resetting local model backend".to_string()),
+    );
+    core.log("warn", "resetting app-managed llama.cpp backend");
+    core.model.shutdown(&settings).await;
+    core.warm_model_for_use(settings, "manual backend reset")
+        .await
+        .map_err(|e| {
+            core.set_status("error");
+            core.update_overlay(
+                "error",
+                Some(short_overlay_error("llama.cpp backend reset failed")),
+            );
+            core.log("error", format!("llama.cpp backend reset failed: {e}"));
+            e.to_string()
+        })?;
+    core.log("info", "llama.cpp backend reset completed");
+    Ok(core.snapshot())
+}
+
+#[tauri::command]
 fn test_parsing(core: tauri::State<'_, Arc<AppCore>>, input: String) -> StatusSnapshot {
     let settings = core.settings.lock().clone();
     let parsed = parser::parse_output(&input, settings.shortcuts_enabled);
@@ -2669,6 +3198,8 @@ pub fn run() {
             confirm_pending_text,
             deny_pending,
             save_feedback_example,
+            set_prompt_panel_collapsed,
+            dismiss_prompt_panel,
             open_dataset_folder,
             open_models_folder,
             get_model_setup_info,
@@ -2679,6 +3210,7 @@ pub fn run() {
             skip_calibration,
             test_audio,
             test_model,
+            reset_llama_backend,
             test_parsing,
             play_recording,
             test_injection
