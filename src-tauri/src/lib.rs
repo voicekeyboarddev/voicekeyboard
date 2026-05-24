@@ -880,7 +880,18 @@ impl AppCore {
     ) {
         self.set_status("processing");
         let pre_roll = Duration::from_millis(settings.pre_roll_ms);
-        let segment = self.audio.buffer().extract(start - pre_roll, end);
+        let post_roll = Duration::from_millis(settings.post_roll_ms);
+        // Wait for post_roll_ms of audio AFTER the trigger release before extracting.
+        // This adds directly to perceived latency (no way to add tail audio without
+        // recording it first) — keep the default small. Captures the last syllable
+        // when users release the trigger fractionally early.
+        if post_roll > Duration::ZERO {
+            tokio::time::sleep(post_roll).await;
+        }
+        let segment = self
+            .audio
+            .buffer()
+            .extract(start - pre_roll, end + post_roll);
         let samples = to_mono_16k(&segment);
         let audio_duration_ms = (samples.len() as u64 * 1000) / audio::TARGET_SAMPLE_RATE as u64;
         let level = audio::max_window_rms(&samples, 160);
@@ -1475,8 +1486,10 @@ impl AppCore {
         self.update_overlay("injecting", None);
         let abort = self.abort.clone();
         let logger = self.logger.clone();
+        let logger_for_block = self.logger.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             let mut replaced_selection = false;
+            let mut focus_changed_skipped = false;
             let actions_to_inject = if let Some(context) = replacement_context {
                 let replacement = text_from_actions(&actions);
                 if !replacement.is_empty()
@@ -1488,6 +1501,43 @@ impl AppCore {
                         .filter(|action| matches!(action, Action::Shortcut { .. }))
                         .cloned()
                         .collect::<Vec<_>>()
+                } else if !replacement.is_empty() {
+                    // Same-focus UIA replace didn't apply. Check whether focus changed
+                    // since capture; if so, locate the captured selection in the new
+                    // field via its surrounding-context anchor and replace it there.
+                    // If focus changed and we can't safely locate it, drop the text
+                    // injection entirely (typing into the wrong field is worse than
+                    // doing nothing).
+                    match context::try_replace_in_changed_focus(&context, &replacement)? {
+                        context::ChangedFocusReplace::Replaced => {
+                            replaced_selection = true;
+                            logger_for_block.log(
+                                "info",
+                                "focus changed since capture — found and replaced selection in new focus via anchor"
+                                    .to_string(),
+                            );
+                            actions
+                                .iter()
+                                .filter(|action| matches!(action, Action::Shortcut { .. }))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        }
+                        context::ChangedFocusReplace::FocusChangedNotFound => {
+                            focus_changed_skipped = true;
+                            logger_for_block.log(
+                                "warn",
+                                "focus changed since capture and original selection not found in new focus — skipping text injection"
+                                    .to_string(),
+                            );
+                            // Still allow shortcut actions through (e.g. {{Enter}}).
+                            actions
+                                .iter()
+                                .filter(|action| matches!(action, Action::Shortcut { .. }))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        }
+                        context::ChangedFocusReplace::SameFocus => actions.clone(),
+                    }
                 } else {
                     actions.clone()
                 }
@@ -1495,12 +1545,12 @@ impl AppCore {
                 actions.clone()
             };
             injection::inject(&actions_to_inject, &settings, &abort)?;
-            Ok::<_, anyhow::Error>((actions, replaced_selection))
+            Ok::<_, anyhow::Error>((actions, replaced_selection, focus_changed_skipped))
         })
         .await;
 
         match result {
-            Ok(Ok((actions, replaced_selection))) => {
+            Ok(Ok((actions, replaced_selection, focus_changed_skipped))) => {
                 let current_window = self.state.lock().current_window.clone();
                 let saved_recording = {
                     let mut state = self.state.lock();
@@ -1562,6 +1612,14 @@ impl AppCore {
                             action_summary(&actions)
                         ),
                     );
+                } else if focus_changed_skipped {
+                    logger.log(
+                        "warn",
+                        format!(
+                            "focus changed — text injection skipped; only shortcut actions (if any) emitted from {} action(s)",
+                            actions.len()
+                        ),
+                    );
                 } else {
                     logger.log(
                         "info",
@@ -1589,16 +1647,8 @@ impl AppCore {
     fn update_overlay(&self, state: &str, text: Option<String>) {
         if let Some(app) = self.app.lock().as_ref() {
             if let Some(window) = app.get_webview_window("overlay") {
-                let (transcript, pending_text, prompt_panel, feedback_id) = {
+                let (transcript, pending_text, prompt_panel) = {
                     let runtime = self.state.lock();
-                    let feedback_id = if state == "done" {
-                        runtime
-                            .feedback_candidate
-                            .as_ref()
-                            .map(|fc| fc.recording.id)
-                    } else {
-                        None
-                    };
                     (
                         runtime.transcript.clone(),
                         runtime
@@ -1607,7 +1657,6 @@ impl AppCore {
                             .map(|actions| text_from_actions(actions))
                             .unwrap_or_default(),
                         runtime.prompt_panel.clone(),
-                        feedback_id,
                     )
                 };
                 let payload = serde_json::json!({
@@ -1616,16 +1665,15 @@ impl AppCore {
                     "transcript": transcript,
                     "pending_text": pending_text,
                     "prompt_panel": prompt_panel,
-                    "feedback_id": feedback_id,
                 });
                 let (width, height) = overlay_dimensions(state);
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                // The Done card carries a clickable ✕ icon so it must be interactive,
-                // but only after injection::inject() has finished, which is exactly
-                // when state="done" is emitted. Per docs/transparent-overlay-notes.md
-                // rule 18, this is safe at this point.
+                // Only confirm/prompt-panel surfaces are interactive. The "done"
+                // card is status-only; making it interactive previously let a
+                // ✕ button be clickable but the feature was removed because of
+                // unsolvable Windows/WebView2 focus quirks (see commit history).
                 let _ = window
-                    .set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel" | "done"));
+                    .set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel"));
                 let _ = app.emit_to("overlay", "overlay-state", payload);
                 match state {
                     "idle" if self.state.lock().prompt_panel.is_none() => {
@@ -2918,33 +2966,6 @@ fn dismiss_prompt_panel(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot 
     core.snapshot()
 }
 
-/// Open the wrong-output feedback popup for the latest injected recording.
-/// Triggered from the small ✕ icon on the Done overlay card. Pushes a
-/// non-collapsed `Feedback`-kind prompt panel so the user gets the popup with
-/// an Expected Output textarea and a Save Wrong Output button.
-#[tauri::command]
-fn open_wrong_feedback_popup(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
-    let candidate = core.state.lock().feedback_candidate.clone();
-    if let Some(fc) = candidate {
-        let recording = fc.recording;
-        core.set_prompt_panel(Some(PromptPanelState {
-            kind: PromptPanelKind::Feedback,
-            state: "ready".to_string(),
-            title: "Wrong output?".to_string(),
-            transcript: recording.transcript.clone(),
-            source_output: recording.output.clone(),
-            text: recording.output.clone(),
-            delivery: None,
-            recording_id: Some(recording.id),
-            can_insert: false,
-            can_save_wrong: true,
-            collapsed: false,
-            error: None,
-        }));
-    }
-    core.snapshot()
-}
-
 #[tauri::command]
 fn open_dataset_folder() -> Result<(), String> {
     let dataset_dir = settings::config_dir().join("dataset");
@@ -3287,7 +3308,6 @@ pub fn run() {
             save_feedback_example,
             set_prompt_panel_collapsed,
             dismiss_prompt_panel,
-            open_wrong_feedback_popup,
             open_dataset_folder,
             open_models_folder,
             get_model_setup_info,

@@ -12,6 +12,7 @@ type Settings = {
   audio_chunk_ms: number;
   rolling_history_seconds: number;
   pre_roll_ms: number;
+  post_roll_ms: number;
   trigger_hold_ms: number;
   right_click_trigger_enabled: boolean;
   movement_tolerance_px: number;
@@ -162,7 +163,7 @@ type Snapshot = {
 };
 
 type PromptPanelState = {
-  kind: "prompt" | "agentic" | "feedback";
+  kind: "prompt" | "agentic";
   state: string;
   title: string;
   transcript: string;
@@ -234,7 +235,6 @@ type OverlayState = {
   transcript?: string;
   pending_text?: string;
   prompt_panel?: PromptPanelState | null;
-  feedback_id?: number | null;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
@@ -439,6 +439,7 @@ function render() {
       ${s ? renderTab(s) : `<section class="panel">Loading backend state...</section>`}
       ${s && shouldShowCalibration(s) ? calibrationPrompt(s) : ""}
       ${s && shouldShowModelSetup(s) ? modelSetupPopup(s) : ""}
+      ${feedbackToast ? `<div class="global-toast">${esc(feedbackToast)}</div>` : ""}
     </main>
   `;
   bind();
@@ -530,13 +531,6 @@ function renderOverlay() {
     bindOverlay();
     return;
   }
-  const wrongHint =
-    overlayState.state === "done" && overlayState.feedback_id
-      ? `<button class="overlay-wrong-x" data-overlay-cmd="open-wrong-feedback" title="Click to save this output as a wrong example in the dataset">
-           <span class="overlay-wrong-x-icon" aria-hidden="true">✕</span>
-           <span class="overlay-wrong-x-label">Save as wrong</span>
-         </button>`
-      : "";
   app.innerHTML = `
     <main class="overlay-shell ${esc(overlayState.state)}">
       <div class="overlay-glass">
@@ -545,7 +539,6 @@ function renderOverlay() {
           <strong>${esc(title)}</strong>
           <p>${esc(detail)}</p>
         </div>
-        ${wrongHint}
       </div>
     </main>
   `;
@@ -556,7 +549,7 @@ function renderPromptPanel(panel: PromptPanelState) {
   if (panel.collapsed) {
     app.innerHTML = `
       <main class="overlay-shell prompt-overlay collapsed">
-        <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.kind === "feedback" ? "Wrong output?" : panel.title)}</button>
+        <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.title)}</button>
       </main>
     `;
     bindOverlay();
@@ -582,11 +575,10 @@ function renderPromptPanel(panel: PromptPanelState) {
           <input readonly value="${esc(panel.transcript || "")}" />
         </label>
         <label>
-          <span>${panel.kind === "feedback" ? "Output" : "Result"}</span>
+          <span>Result</span>
           <textarea id="prompt-result-text" readonly>${esc(panel.text || panel.source_output || "")}</textarea>
         </label>
         ${panel.can_save_wrong ? `
-          ${panel.kind === "feedback" ? `<p class="prompt-hint">Saving here writes a negative example to the on-disk dataset. Type what should have happened (optional) and click Save Wrong Output.</p>` : ""}
           <label>
             <span>Expected behavior/output (optional)</span>
             <textarea id="${expectedId}" class="expected-feedback" placeholder="What should have been typed or done instead?"></textarea>
@@ -769,7 +761,6 @@ function diagnostics(s: Snapshot) {
         <h2>Previous Recordings</h2>
         <div class="toolbar">
           <button class="secondary" data-cmd="open-dataset-folder">Open dataset folder</button>
-          ${feedbackToast ? `<span class="feedback-toast">${esc(feedbackToast)}</span>` : ""}
         </div>
         ${recordingsTable(s)}
         <h2>Exact Model Inputs</h2>
@@ -1271,6 +1262,7 @@ function settingsView(s: Snapshot) {
     ["trigger_hold_ms", "Trigger hold ms", "number"],
     ["movement_tolerance_px", "Movement tolerance px", "number"],
     ["pre_roll_ms", "Audio pre-roll ms", "number"],
+    ["post_roll_ms", "Audio post-roll ms", "number"],
     ["rolling_history_seconds", "Rolling history seconds", "number"],
     ["vad_rms_threshold", "VAD RMS threshold", "number"],
     ["context_length_tokens", "Model context tokens", "number"],
@@ -1541,6 +1533,7 @@ function bind() {
   document.querySelectorAll<HTMLButtonElement>("[data-save-wrong]").forEach((btn) => {
     btn.addEventListener("click", () => {
       pendingNegativeId = Number(btn.dataset.saveWrong);
+      showFeedbackToast("Type expected output, then click Save Wrong Output");
       render();
     });
   });
@@ -1554,8 +1547,10 @@ function bind() {
       pendingNegativeId = null;
       try {
         snapshot = await invoke("save_feedback_example", { correct: false, recordingId: id, expectedOutput: expected || null });
-        showFeedbackToast("Saved as wrong example");
-      } catch (error) { alert(String(error)); }
+        showFeedbackToast("Saved as wrong example ✓");
+      } catch (error) {
+        showFeedbackToast(`Save failed: ${String(error)}`);
+      }
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-save-cancel]").forEach((btn) => {
@@ -1768,10 +1763,6 @@ async function runOverlayCommand(cmd: string) {
       await navigator.clipboard.writeText(text);
       return;
     }
-    if (cmd === "open-wrong-feedback") {
-      snapshot = await invoke("open_wrong_feedback_popup");
-      return;
-    }
     if (cmd === "save-wrong-feedback") {
       const panel = overlayState.prompt_panel;
       if (!panel?.recording_id) {
@@ -1852,8 +1843,7 @@ async function boot() {
       if (
         overlayState.state === "prompt-panel" &&
         panel &&
-        !panel.collapsed &&
-        panel.kind !== "feedback"
+        !panel.collapsed
       ) {
         invoke("set_prompt_panel_collapsed", { collapsed: true }).catch(() => {});
       }

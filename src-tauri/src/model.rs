@@ -203,6 +203,16 @@ impl ModelClient {
                 .arg("--parallel")
                 .arg("1")
                 .arg("--no-cache-idle-slots")
+                // Enable KV-cache prefix reuse across requests with different
+                // suffixes. Production interpretation prompts share a large
+                // stable rules block (~1500 tokens) but vary in the trailing
+                // context/transcript — without this flag, llama-server only
+                // reuses cache on an exact slot match and reprocesses the full
+                // ~2000-token prompt every request (observed ~1100ms TTFT).
+                // With it, the stable prefix is reused and only the new
+                // suffix tokens get processed (target: ~200-300ms TTFT).
+                .arg("--cache-reuse")
+                .arg("256")
                 .arg("--jinja")
                 .arg("--flash-attn")
                 .arg("on")
@@ -1267,18 +1277,29 @@ pub fn prompt_handoff_prompt(
     let context_text = format_window_context(context, true);
     let recent_context_section = format_recent_context(recent_context);
     format!(
-        "You are the second-level Prompt agent for Voice Keyboard.\n\
-The local interpreter handed this request to you because it needs a stronger answer, rewrite, summary, translation, or longer composition.\n\
+        "You are the second-level Prompt agent for Voice Keyboard. Think carefully before you answer.\n\
+The local interpreter handed this request to you because it requires real reasoning — translation, rewriting, summarization, paraphrasing, drafting, or any larger transformation that the small first-pass model cannot do reliably.\n\
+\n\
+HOW TO READ THE INPUT:\n\
+- The 'Transcript/request' line is the USER'S INSTRUCTION. It tells you WHAT to do.\n\
+- The OPERAND of that instruction — the content you must transform — is whatever is shown in the context block above: 'Currently selected text', the SELECTED span inside the field-state visual, or the focused field's content. Demonstratives in the transcript ('this', 'that', 'it', 'the paragraph', 'the above', 'the selection') always refer to that operand.\n\
+- NEVER transform the instruction itself. If the instruction says 'translate this to Hindi' and the selected text is an English paragraph, output the Hindi translation of the paragraph — NOT a Hindi rendering of the words 'translate this to Hindi'.\n\
+- If the instruction has no explicit operand and no selection/context is provided, treat the transcript as an authoring request and produce the asked-for content (e.g. 'draft a polite decline' → write the actual decline).\n\
+\n\
+Apply the instruction faithfully:\n\
+- Translate: produce the operand in the target language; do not summarize, paraphrase, or omit content unless asked.\n\
+- Rewrite / paraphrase / polish / proofread: keep the meaning and length proportional; change tone/grammar/style as instructed.\n\
+- Summarize: condense the operand; do not invent facts not present.\n\
+- Expand / shorten / simplify: adjust length or complexity while preserving the operand's intent.\n\
 \n\
 Return exactly one JSON object and no Markdown/code fence/explanation outside it:\n\
 {{\"delivery\":\"ui\"|\"keyboard\",\"text\":\"...\"}}\n\
 \n\
 Delivery rules:\n\
-- Use \"ui\" for direct questions, explanations, summaries to read, and answers the user likely wants shown in the popup.\n\
-- Use \"keyboard\" for text that should be inserted into the active field or replace selected text.\n\
-- The app will decide insert vs replace from the captured selection; do not include labels like Insert or Replace in the text.\n\
-- Preserve the selected text language unless the user asks to translate.\n\
-- Return only the final useful content in text.\n\
+- Use \"keyboard\" whenever the user has selected text or is clearly editing a field — the transformed output should replace the selection or be inserted in the field. This is the default for rewrite/translate/summarize-the-selection tasks.\n\
+- Use \"ui\" only for direct questions, explanations, or summaries the user wants to READ rather than insert (e.g. 'what does this mean', 'explain this code', with no selection to replace).\n\
+- The app decides insert vs replace from the captured selection; do not include labels like Insert or Replace in the text. Do not wrap output in quotes. Do not add commentary.\n\
+- Output only the final useful content in the 'text' field — the result of applying the instruction to the operand.\n\
 \n\
 {recent_context_section}{context_text}\n\
 Transcript/request: {transcript}\n\
@@ -1327,7 +1348,7 @@ Default behaviour: just type the user's words as keystrokes. This is true regard
 Questions, requests, instructions, and chat-style sentences are NOT a reason to use a handoff tool. If the user said something that could plausibly just be typed into the current field, type it. Examples that must be typed verbatim, not handed off: 'why is the build still failing', 'what is the capital of France', 'can you check the logs', 'tell me about the new feature', 'how do I undo this commit'. The user can decide for themselves whether to send those words to a person, an LLM, a search bar, or a chat field — your job is only to type them.\n\
 \n\
 Handoff tools (use only when the user clearly asks Voice Keyboard itself to author or transform content right now, not when they are typing a message that asks someone else to do it):\n\
-- Output exactly {{{{Prompt}}}} ONLY when the user explicitly asks the local assistant to AUTHOR or REWRITE content that spans multiple sentences. The handoff is for cases where the generated/rewritten output is clearly more than one sentence — e.g. drafting an email, a paragraph, a multi-line message, a summary of selected text, a translation of a paragraph, or rewriting a multi-sentence selection in a different tone. Required triggers (at least one must be present): explicit verbs like 'write', 'draft', 'compose', 'rewrite', 'summarize', 'summarise', 'translate', 'polish', 'proofread', 'paraphrase', 'expand', 'shorten', AND either (a) selected text of more than one sentence to transform, or (b) a clearly multi-sentence authoring request. Single-sentence dictation, short factual questions, short imperative sentences, normal chat-style sentences, requests phrased to a person, single-sentence rewrites of a single-sentence selection, and anything the user could reasonably want typed verbatim are NOT handoffs.\n\
+- Output exactly {{{{Prompt}}}} whenever the transcript is an INSTRUCTION to transform some OPERAND (selected text, focused field content, or a request to author new content) rather than text the user wants typed verbatim. The transform verbs include — but are not limited to — write, draft, compose, rewrite, translate, summarize/summarise, paraphrase, proofread, polish, expand, shorten, simplify, explain, reword, reformat, convert. Two conditions must hold: (1) the transcript clearly invokes one of these transform verbs (or an unambiguous synonym), AND (2) executing the instruction would produce output that is NOT a verbatim restatement of the transcript itself. Selection length does NOT gate this — a single short word, a sentence, or a paragraph all qualify if the verb invokes a real transformation. When in doubt and the user said 'this', 'that', 'it', 'the selection', 'the paragraph', 'the above' etc., assume they mean the focused content and route to {{{{Prompt}}}}. Do NOT execute the transform yourself by typing a literal answer — the local model cannot reliably translate, rewrite, or summarize, so it must hand off. Single-sentence dictation with no transform verb, short factual questions, normal chat-style sentences, and requests phrased to a person are NOT handoffs.\n\
 - Output exactly {{{{agentic}}}} ONLY when the user explicitly requests multi-step computer-use work that requires file/clipboard/notes/project access, such as 'save this to my notes', 'put this on the clipboard', 'save to the project folder', 'open my notes and append', 'apply this patch'. The app will show a placeholder; do not attempt the steps yourself.\n\
 - If you are not certain a handoff is needed, do not use one. Prefer typing over routing. Routing is wrong if the user just wanted their words typed.\n\
 - Do not use handoff tools for simple dictation, questions phrased conversationally, browser navigation, search/address bar text, terminal commands, or direct key presses.\n\
@@ -1605,6 +1626,15 @@ Examples:\n\
   Field state: 'Robotics Group NIT<<<CURSOR>>>' + transcript 'press enter' → output {{{{Enter}}}}.\n\
   Field state: 'name.surname@<<<CURSOR>>>' + transcript 'gmail dot com' → output gmail.com (cursor is mid-text, no Enter).\n\
   Field state: '<<<SELECTED:hello world>>>' + transcript 'goodbye' → output goodbye (replaces the selection).\n\
+\n\
+TINY TYPO / WORD FIX (when SELECTED is just 1-3 words and the transcript implies a correction):\n\
+  Field state: 'I will <<<SELECTED:teh>>> book' + transcript 'the' → output the (no caps, no spaces; replaces the 3 chars exactly).\n\
+  Field state: 'Please <<<SELECTED:recieve>>> it' + transcript 'receive' → output receive (preserve lowercase from the selection).\n\
+  Field state: '<<<SELECTED:Hello>>> world' + transcript 'hi' → output Hi (selection started capitalized, preserve capitalization).\n\
+  Field state: 'meet at <<<SELECTED:3pm>>> today' + transcript 'four PM' → output 4pm (match surrounding casing/format of the selection).\n\
+  Field state: 'the <<<SELECTED:quick brown>>> fox' + transcript 'lazy gray' → output lazy gray (two-word selection, two-word replacement, no surrounding text).\n\
+  RULE: For short selections, output ONLY the replacement tokens. Do NOT echo the words before/after the selection. Do NOT add leading/trailing spaces (the surrounding text already has them). Match the capitalization style of the selection itself, not the sentence.\n\
+\n\
   Field state: '(empty)' + transcript 'open YouTube' → output https://www.youtube.com{{{{Enter}}}}.\n\
   Field state: '(empty)' + transcript 'hello there' → output Hello there.\n\
   Field state: 'Hello<<<CURSOR>>>' + transcript 'world' → output  world.\n\
@@ -1766,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn interpretation_prompt_emphasises_multi_sentence_handoff() {
+    fn interpretation_prompt_routes_transforms_regardless_of_length() {
         let prompt = interpretation_prompt(
             "anything",
             None,
@@ -1775,12 +1805,14 @@ mod tests {
             "English",
             &[],
         );
-        // The rule must mention multi-sentence as the bar for {{Prompt}}.
-        assert!(prompt.contains("spans multiple sentences"));
-        // Single-sentence rewrites must NOT route.
-        assert!(prompt.contains("single-sentence rewrites of a single-sentence selection"));
-        // Negative-rewrite few-shot: a short selection rewritten inline, not handed off.
-        assert!(prompt.contains("Output: I look forward to seeing you soon."));
+        // The rule must trigger on transform verbs regardless of selection size.
+        assert!(prompt.contains("Selection length does NOT gate this"));
+        // Must list the core transform verbs as routing triggers.
+        assert!(prompt.contains("translate"));
+        assert!(prompt.contains("rewrite"));
+        assert!(prompt.contains("summarize"));
+        // Must forbid local execution of the transform.
+        assert!(prompt.contains("Do NOT execute the transform yourself"));
     }
 
     #[test]
@@ -1799,10 +1831,10 @@ mod tests {
             "missing 'rare, exceptional cases' framing: {}",
             prompt
         );
-        // Tightened {{Prompt}} rule names required verbs.
-        assert!(prompt.contains("explicit verbs"));
-        assert!(prompt.contains("'rewrite'"));
-        assert!(prompt.contains("'summarize'"));
+        // {{Prompt}} rule names core transform verbs (broadened — no longer length-gated).
+        assert!(prompt.contains("transform verbs"));
+        assert!(prompt.contains("rewrite"));
+        assert!(prompt.contains("summarize"));
         // Negative few-shots: questions should pass through as text, not {{Prompt}}.
         assert!(prompt.contains("Output: what is the capital of the US"));
         assert!(prompt.contains("Output: Why is it still taking so long to get the diagnostics?"));
@@ -2147,55 +2179,46 @@ fn format_window_context(context: Option<&WindowContext>, image_attached: bool) 
                     let before = text.text_before_cursor.as_deref().unwrap_or("");
                     let selected = text.selected_text.as_deref().unwrap_or("");
                     let after = text.text_after_cursor.as_deref().unwrap_or("");
-                    let local_before = if selected.is_empty() {
-                        before
+                    // Hard caps on what we feed into the prompt regardless of how
+                    // much the UIA capture returned. Without this, large fields
+                    // (terminal scrollback, big documents) blow past the model's
+                    // ctx size — we saw 6145 tokens in a terminal with the prior
+                    // un-capped dumps. The cursor is almost always near the end
+                    // of what the user just typed, so before/tail >> after/head.
+                    let (before_cap, after_cap) = if selected.is_empty() {
+                        (600usize, 200usize)
                     } else {
-                        tail_chars(before, 120)
+                        (200usize, 200usize)
                     };
-                    let local_after = if selected.is_empty() {
-                        after
-                    } else {
-                        head_chars(after, 120)
-                    };
+                    let local_before = tail_chars(before, before_cap);
+                    let local_after = head_chars(after, after_cap);
+                    let before_clipped = before.chars().count() > local_before.chars().count();
+                    let after_clipped = after.chars().count() > local_after.chars().count();
                     let has_any = !before.is_empty() || !selected.is_empty() || !after.is_empty();
                     if has_any {
+                        let before_marker = if before_clipped { "…" } else { "" };
+                        let after_marker = if after_clipped { "…" } else { "" };
                         let visual = if !selected.is_empty() {
                             format!(
-                                "{local_before}<<<SELECTED:{selected}>>>{local_after}"
+                                "{before_marker}{local_before}<<<SELECTED:{selected}>>>{local_after}{after_marker}"
                             )
                         } else {
-                            format!("{before}<<<CURSOR>>>{after}")
+                            format!("{before_marker}{local_before}<<<CURSOR>>>{local_after}{after_marker}")
                         };
                         parts.push(format!(
-                            "Current field state (the text below is ALREADY typed in the field; do NOT re-type it):\n{visual}"
+                            "Current field state (the text below is ALREADY typed in the field; do NOT re-type it; '…' marks clipped boundaries of a larger field):\n{visual}"
                         ));
                         if !selected.is_empty() {
                             parts.push(format!(
                                 "Currently selected text (highlighted, will be replaced if you output text): {selected}"
                             ));
-                        }
-                        if !local_before.is_empty() {
-                            parts.push(format!("Already-typed text before cursor: {local_before}"));
-                        }
-                        if !local_after.is_empty() {
-                            parts.push(format!("Already-typed text after cursor: {local_after}"));
+                            parts.push(
+                                "Selection-focused context: selected text is the primary replacement target. Use only the nearby before/after snippets shown above for local grammar and spacing."
+                                    .to_string(),
+                            );
                         }
                     } else {
                         parts.push("Current field state: (empty — no text typed yet)".to_string());
-                    }
-                    if selected.is_empty() {
-                        if let Some(full) = text.full_text.as_ref().filter(|s| !s.is_empty()) {
-                            parts.push(format!(
-                                "Focused field full text{}:\n{}",
-                                if text.truncated { " (truncated)" } else { "" },
-                                clip_prompt_text(full, 500)
-                            ));
-                        }
-                    } else {
-                        parts.push(
-                            "Selection-focused context: selected text is the primary replacement target. Use only the nearby before/after snippets shown above for local grammar and spacing."
-                                .to_string(),
-                        );
                     }
                     parts.join("\n")
                 })

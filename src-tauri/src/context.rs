@@ -88,7 +88,7 @@ fn window_context_at_point_with_config(
         };
         if let Some(hwnd) = root {
             if let Some(mut context) = window_context_from_hwnd(hwnd, x, y) {
-                context.focused_text = focused_text_context(6000);
+                context.focused_text = focused_text_context(1500);
                 context.cursor_screenshot = capture_window_screenshot(hwnd, x, y, screenshot)
                     .or_else(|| {
                         capture_cursor_screenshot(screenshot.width, screenshot.height, x, y)
@@ -97,7 +97,7 @@ fn window_context_at_point_with_config(
             }
         }
         let mut context = active_window_context()?;
-        context.focused_text = focused_text_context(6000);
+        context.focused_text = focused_text_context(1500);
         context.cursor_screenshot =
             capture_cursor_screenshot(screenshot.width, screenshot.height, x, y);
         Some(context)
@@ -257,6 +257,119 @@ pub fn replace_preserved_selection(
     _replacement: &str,
 ) -> anyhow::Result<bool> {
     Ok(false)
+}
+
+/// Outcome of attempting to recover a selection-replacement when focus has changed
+/// between the time we captured the selection (at pointer_down) and the time of
+/// injection. Distinguishes "focus is still the same — caller may fall through"
+/// from "focus changed — we either fixed it or definitively could not."
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChangedFocusReplace {
+    /// Focused element still matches captured; this function did nothing. Caller
+    /// should use the normal `replace_preserved_selection` / plain injection path.
+    SameFocus,
+    /// Focus changed; we located the captured selection in the new field via its
+    /// surrounding-context anchor and replaced it. Caller should skip text injection.
+    Replaced,
+    /// Focus changed and we could NOT safely locate the captured selection in the
+    /// new field. Caller should skip text injection to avoid corrupting the new field.
+    FocusChangedNotFound,
+}
+
+/// When focus has demonstrably changed since `captured` was taken, try to locate
+/// the captured selection in the newly-focused element by searching for the
+/// surrounding-context anchor (`text_before_cursor + selected_text + text_after_cursor`).
+/// If a unique match exists in the new field's value and the element exposes
+/// UIA ValuePattern, replace it in-place.
+#[cfg(windows)]
+pub fn try_replace_in_changed_focus(
+    captured: &FocusedTextContext,
+    replacement: &str,
+) -> anyhow::Result<ChangedFocusReplace> {
+    use windows::core::BSTR;
+    use windows::Win32::{
+        Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK},
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        },
+        UI::Accessibility::{
+            CUIAutomation, IUIAutomation, IUIAutomationValuePattern, UIA_ValuePatternId,
+        },
+    };
+
+    let Some(selected) = captured
+        .selected_text
+        .as_ref()
+        .filter(|text| !text.is_empty())
+    else {
+        return Ok(ChangedFocusReplace::SameFocus);
+    };
+
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let should_uninit = hr == S_OK || hr == S_FALSE;
+        if hr.is_err() && hr != RPC_E_CHANGED_MODE {
+            return Ok(ChangedFocusReplace::SameFocus);
+        }
+
+        let outcome = (|| -> ChangedFocusReplace {
+            let Ok(automation): Result<IUIAutomation, _> =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+            else {
+                return ChangedFocusReplace::SameFocus;
+            };
+            let Ok(element) = automation.GetFocusedElement() else {
+                return ChangedFocusReplace::SameFocus;
+            };
+            // Same focus → caller's existing path handles it; do nothing here.
+            if focused_element_matches(&element, captured) {
+                return ChangedFocusReplace::SameFocus;
+            }
+            // Focus has changed. From here on we must NEVER fall through to plain
+            // text injection — that would corrupt the new field.
+            if element.CurrentIsPassword().ok().map(|b| b.as_bool()).unwrap_or(false) {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            }
+            let Ok(pattern) =
+                element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+            else {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            };
+            let Ok(read_only) = pattern.CurrentIsReadOnly() else {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            };
+            if read_only.as_bool() {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            }
+            let Ok(current_bstr) = pattern.CurrentValue() else {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            };
+            let current = bstr_to_string(current_bstr);
+            let Some(next) =
+                replace_selected_text_in_value(&current, captured, selected, replacement)
+            else {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            };
+            if pattern.SetValue(&BSTR::from(next.as_str())).is_err() {
+                return ChangedFocusReplace::FocusChangedNotFound;
+            }
+            ChangedFocusReplace::Replaced
+        })();
+
+        if should_uninit {
+            CoUninitialize();
+        }
+        Ok(outcome)
+    }
+}
+
+#[cfg(not(windows))]
+pub fn try_replace_in_changed_focus(
+    _captured: &FocusedTextContext,
+    _replacement: &str,
+) -> anyhow::Result<ChangedFocusReplace> {
+    Ok(ChangedFocusReplace::SameFocus)
 }
 
 #[cfg(windows)]

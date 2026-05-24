@@ -130,7 +130,6 @@ pub struct RecordingEntry {
 pub enum PromptPanelKind {
     Prompt,
     Agentic,
-    Feedback,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

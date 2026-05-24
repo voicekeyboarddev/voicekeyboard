@@ -13,6 +13,7 @@ pub struct Settings {
     pub audio_chunk_ms: u64,
     pub rolling_history_seconds: u64,
     pub pre_roll_ms: u64,
+    pub post_roll_ms: u64,
     pub trigger_hold_ms: u64,
     pub right_click_trigger_enabled: bool,
     pub movement_tolerance_px: f64,
@@ -64,7 +65,8 @@ impl Default for Settings {
         Self {
             audio_chunk_ms: 500,
             rolling_history_seconds: 30,
-            pre_roll_ms: 2000,
+            pre_roll_ms: 900,
+            post_roll_ms: 150,
             trigger_hold_ms: 450,
             right_click_trigger_enabled: false,
             movement_tolerance_px: 12.0,
