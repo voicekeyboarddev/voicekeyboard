@@ -71,6 +71,12 @@ struct RuntimeState {
     pending_feedback_recording: Option<RecordingEntry>,
     feedback_candidate: Option<FeedbackCandidate>,
     prompt_panel: Option<PromptPanelState>,
+    /// Most recent overlay state that the orb window was driven to (idle,
+    /// recording, processing, done, ...). Used to restore the orb to its real
+    /// status after a prompt-handoff popup is dismissed or expanded — the
+    /// popup is its own window now, so the orb is no longer hijacked, and we
+    /// need somewhere to remember "what should the orb show right now".
+    last_overlay_state: String,
     next_recording_id: u64,
     metrics: types::SystemMetrics,
     measured_first_request: bool,
@@ -91,6 +97,7 @@ impl Default for RuntimeState {
             pending_feedback_recording: None,
             feedback_candidate: None,
             prompt_panel: None,
+            last_overlay_state: "idle".to_string(),
             next_recording_id: 1,
             metrics: types::SystemMetrics::default(),
             measured_first_request: false,
@@ -185,21 +192,101 @@ impl AppCore {
     }
 
     fn set_prompt_panel(&self, panel: Option<PromptPanelState>) {
-        let has_panel = panel.is_some();
         self.state.lock().prompt_panel = panel;
         self.emit_snapshot();
-        self.update_overlay(if has_panel { "prompt-panel" } else { "idle" }, None);
+        self.refresh_overlay_for_prompt_panel();
+        self.update_prompt_panel_window();
     }
 
     fn mutate_prompt_panel(&self, update: impl FnOnce(&mut PromptPanelState)) {
+        // Track whether the change actually flipped the collapsed flag — if
+        // not, we don't need to touch the orb overlay window (which would
+        // otherwise re-emit overlay-state on every streaming chunk and reset
+        // the orb's breathing animation mid-stream).
+        let mut collapsed_changed = false;
         {
             let mut state = self.state.lock();
             if let Some(panel) = state.prompt_panel.as_mut() {
+                let before = panel.collapsed;
                 update(panel);
+                collapsed_changed = before != panel.collapsed;
             }
         }
         self.emit_snapshot();
-        self.update_overlay("prompt-panel", None);
+        if collapsed_changed {
+            self.refresh_overlay_for_prompt_panel();
+        }
+        self.update_prompt_panel_window();
+    }
+
+    /// After prompt-panel state changes, drive the orb overlay window to the
+    /// right surface: show the small "expand" pill while the popup is
+    /// collapsed, otherwise restore the orb to whatever it was showing before
+    /// the popup arrived.
+    fn refresh_overlay_for_prompt_panel(&self) {
+        let (has_panel, collapsed, restore_state) = {
+            let state = self.state.lock();
+            (
+                state.prompt_panel.is_some(),
+                state
+                    .prompt_panel
+                    .as_ref()
+                    .map(|p| p.collapsed)
+                    .unwrap_or(false),
+                state.last_overlay_state.clone(),
+            )
+        };
+        if has_panel && collapsed {
+            self.update_overlay("prompt-panel", None);
+        } else {
+            self.update_overlay(&restore_state, None);
+        }
+    }
+
+    /// Drive the separate prompt-panel webview window: shown when the popup
+    /// is active and not collapsed, hidden otherwise. We always emit the
+    /// latest state so the window's JS renders fresh content as soon as it
+    /// becomes visible.
+    fn update_prompt_panel_window(&self) {
+        let Some(app) = self.app.lock().clone() else {
+            return;
+        };
+        let panel = self.state.lock().prompt_panel.clone();
+        let Some(window) = app.get_webview_window("prompt-panel") else {
+            return;
+        };
+        match panel {
+            Some(panel) => {
+                let _ = app.emit_to("prompt-panel", "prompt-panel-state", &panel);
+                let is_visible = window.is_visible().unwrap_or(false);
+                let is_minimized = window.is_minimized().unwrap_or(false);
+                if panel.collapsed {
+                    if is_visible {
+                        let _ = window.hide();
+                    }
+                } else {
+                    // Show without grabbing focus: the popup pops up while
+                    // the user's target app still has focus, and we MUST NOT
+                    // steal it — auto-inject (delivery=="keyboard") checks
+                    // `target_still_focused` and silently skips the injection
+                    // if focus moved. The user can click into the popup to
+                    // copy/edit; until then they're still in their target.
+                    // Guard the show/unminimize calls so streaming-chunk
+                    // updates don't bring the window to front repeatedly.
+                    if is_minimized {
+                        let _ = window.unminimize();
+                    }
+                    if !is_visible {
+                        let _ = window.show();
+                    }
+                }
+            }
+            None => {
+                if window.is_visible().unwrap_or(false) {
+                    let _ = window.hide();
+                }
+            }
+        }
     }
 
     fn set_status(&self, status: impl Into<String>) {
@@ -1255,6 +1342,39 @@ impl AppCore {
             return;
         }
 
+        // When the focused target isn't a typable field, divert any text the
+        // model wants to type into the prompt-handoff popup instead. This is
+        // how "the user selects a paragraph and says 'translate this'" lands:
+        // the model returns Action::Text("..."), but there's nowhere to type
+        // it, so we surface it as a popup reply they can read or copy.
+        // Shortcut actions (Ctrl+C, etc.) are intentionally NOT diverted —
+        // they execute regardless of whether the field is typable.
+        let contains_text = parsed
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::Text { .. }));
+        if contains_text && !looks_typable(context.as_ref()) {
+            let combined = text_from_actions(&parsed.actions);
+            if !combined.trim().is_empty() {
+                self.log(
+                    "info",
+                    format!(
+                        "no typable target focused — showing reply in popup ({} chars)",
+                        combined.chars().count()
+                    ),
+                );
+                self.show_text_reply_popup(
+                    recording.id,
+                    transcript.clone(),
+                    combined,
+                    interpreted.clone(),
+                );
+                self.state.lock().pending_feedback_recording = None;
+                self.set_status("ready");
+                return;
+            }
+        }
+
         let decision = if copy_shortcut_needs_confirmation(&parsed.actions, context.as_ref()) {
             safety::SafetyDecision {
                 tier: SafetyTier::Confirm,
@@ -1389,9 +1509,22 @@ impl AppCore {
             .await;
 
         match response {
-            Ok(result) => {
+            Ok(mut result) => {
                 if result.used_media_fallback {
                     self.log("warn", "prompt handoff retried without audio/image media");
+                }
+                // The model picks delivery based on the question and context,
+                // but it can still pick "keyboard" when the focused element
+                // can't actually accept text (e.g. user had selected a chunk
+                // of a PDF and asked for a translation). Override to "ui" so
+                // the result lands in the popup rather than being silently
+                // dropped by the auto-inject path.
+                if result.delivery == "keyboard" && !looks_typable(context.as_ref()) {
+                    self.log(
+                        "info",
+                        "forcing prompt-handoff delivery=ui (no typable target focused)",
+                    );
+                    result.delivery = "ui".to_string();
                 }
                 self.push_request_log(RequestLog {
                     ts: Utc::now().to_rfc3339(),
@@ -1457,6 +1590,34 @@ impl AppCore {
                 self.set_status("error");
             }
         }
+    }
+
+    /// Show free-form text in the prompt-handoff popup as a "reply" — used
+    /// when the user asked a question while not in a typable field, so we
+    /// can't (and shouldn't) inject the text into the focused app. The popup
+    /// is the standard surface for "here's the model's response, just look
+    /// at it / copy it / mark it wrong".
+    fn show_text_reply_popup(
+        &self,
+        recording_id: u64,
+        transcript: String,
+        text: String,
+        source_output: String,
+    ) {
+        self.set_prompt_panel(Some(PromptPanelState {
+            kind: PromptPanelKind::Prompt,
+            state: "done".to_string(),
+            title: "Reply".to_string(),
+            transcript,
+            source_output,
+            text,
+            delivery: Some("ui".to_string()),
+            recording_id: Some(recording_id),
+            can_insert: false,
+            can_save_wrong: true,
+            collapsed: false,
+            error: None,
+        }));
     }
 
     fn show_agentic_placeholder(&self, recording_id: u64, transcript: String, source_output: String) {
@@ -1645,6 +1806,14 @@ impl AppCore {
     }
 
     fn update_overlay(&self, state: &str, text: Option<String>) {
+        // Remember the orb's "real" state (recording, processing, done, ...)
+        // so we can restore it after a prompt-panel collapse/dismiss without
+        // having to re-derive it from `status`. "prompt-panel" is the pill
+        // surface — it's a derived view of the popup state, not something we
+        // want to restore back to on its own.
+        if state != "prompt-panel" {
+            self.state.lock().last_overlay_state = state.to_string();
+        }
         if let Some(app) = self.app.lock().as_ref() {
             if let Some(window) = app.get_webview_window("overlay") {
                 let (transcript, pending_text, prompt_panel) = {
@@ -1668,17 +1837,19 @@ impl AppCore {
                 });
                 let (width, height) = overlay_dimensions(state);
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                // Only confirm/prompt-panel surfaces are interactive. The "done"
-                // card is status-only; making it interactive previously let a
-                // ✕ button be clickable but the feature was removed because of
-                // unsolvable Windows/WebView2 focus quirks (see commit history).
+                // Only confirm/prompt-panel surfaces are interactive. The
+                // "done" card is status-only; making it interactive
+                // previously let a ✕ button be clickable but the feature was
+                // removed because of unsolvable Windows/WebView2 focus quirks
+                // (see commit history). The prompt-panel surface here is the
+                // small collapsed "expand" pill — it needs to receive clicks.
                 let _ = window
                     .set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel"));
                 let _ = app.emit_to("overlay", "overlay-state", payload);
                 match state {
                     "idle" if self.state.lock().prompt_panel.is_none() => {
-                            let _ = window.hide();
-                        }
+                        let _ = window.hide();
+                    }
                     _ => {
                         position_overlay(app);
                         let _ = window.show();
@@ -2758,11 +2929,31 @@ fn replace_text_actions(actions: Vec<Action>, replacement: String) -> Vec<Action
     next
 }
 
+/// Best-effort check for "the focused element accepts typed text right now".
+///
+/// We rely on UI Automation's `cursor_known` flag, which is set only when the
+/// focused element exposes a live caret (TextPattern caret active, or the
+/// equivalent). That cleanly separates:
+/// - real editable fields (Notepad, address bars, textareas, code editors)
+///   → cursor_known=true → typable
+/// - selected-but-not-editable surfaces (a paragraph in a Chrome article, a
+///   PDF reader page, a video transcript pane) → cursor_known=false → NOT
+///   typable, so injecting keystrokes there would either no-op or land in
+///   the wrong place.
+fn looks_typable(context: Option<&WindowContext>) -> bool {
+    context
+        .and_then(|c| c.focused_text.as_ref())
+        .map(|ft| ft.cursor_known)
+        .unwrap_or(false)
+}
+
 fn overlay_dimensions(state: &str) -> (f64, f64) {
     if state == "confirm" {
         (430.0, 214.0)
     } else if state == "prompt-panel" {
-        (620.0, 330.0)
+        // Just the collapsed "expand prompt result" pill — the full popup is
+        // its own decorated, resizable window now.
+        (280.0, 64.0)
     } else {
         (360.0, 96.0)
     }
@@ -2785,6 +2976,50 @@ fn create_overlay_window(app: &tauri::App) -> tauri::Result<()> {
     let _ = overlay.set_ignore_cursor_events(true);
     position_overlay(app.handle());
     Ok(())
+}
+
+/// Standard, decorated, resizable webview window that hosts the prompt-handoff
+/// result UI. Starts hidden and is shown by `update_prompt_panel_window`
+/// whenever a non-collapsed prompt-panel is active. Living in its own window
+/// means the transparent orb overlay isn't replaced when a result arrives, the
+/// content scrolls natively when it overflows, and the user can resize/move it
+/// like any normal popup.
+fn create_prompt_panel_window(app: &tauri::App) -> tauri::Result<()> {
+    let window = WebviewWindowBuilder::new(
+        app,
+        "prompt-panel",
+        WebviewUrl::App("index.html?prompt-panel".into()),
+    )
+    .title("Prompt handoff result")
+    .inner_size(660.0, 480.0)
+    .min_inner_size(480.0, 320.0)
+    .resizable(true)
+    .decorations(true)
+    .visible(false)
+    .always_on_top(true)
+    .skip_taskbar(false)
+    .build()?;
+    position_prompt_panel_window(&window);
+    Ok(())
+}
+
+fn position_prompt_panel_window(window: &tauri::WebviewWindow) {
+    if let Ok(Some(monitor)) = window.primary_monitor() {
+        let size = monitor.size();
+        let scale = monitor.scale_factor();
+        let logical_width = size.width as f64 / scale;
+        let logical_height = size.height as f64 / scale;
+        let window_size = window
+            .inner_size()
+            .ok()
+            .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
+            .unwrap_or((660.0, 480.0));
+        // Sit just above the bottom-centered overlay orb so the two surfaces
+        // read as related but stay independent.
+        let x = ((logical_width - window_size.0) / 2.0).max(12.0);
+        let y = (logical_height - window_size.1 - 180.0).max(12.0);
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
 }
 
 fn position_overlay(app: &tauri::AppHandle) {
@@ -3268,10 +3503,12 @@ pub fn run() {
     tracing_subscriber::fmt::init();
     let core = AppCore::new();
     let core_for_close = core.clone();
+    let core_for_panel_close = core.clone();
     tauri::Builder::default()
         .manage(core.clone())
         .setup(move |app| {
             create_overlay_window(app)?;
+            create_prompt_panel_window(app)?;
             core.set_app(app.handle().clone());
             let core_for_start = core.clone();
             tauri::async_runtime::spawn(async move {
@@ -3290,6 +3527,16 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         core.shutdown().await;
                     });
+                }
+            } else if window.label() == "prompt-panel" {
+                // Treat the native close button as "dismiss the handoff" —
+                // hide the popup, drop the panel state, and let the orb
+                // restore itself. Without preventing the close, Tauri would
+                // destroy the window and our next show() call would silently
+                // do nothing.
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    core_for_panel_close.set_prompt_panel(None);
                 }
             }
         })

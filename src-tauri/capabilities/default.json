@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Main window permissions for Voice Keyboard.",
-  "windows": ["main", "overlay"],
+  "windows": ["main", "overlay", "prompt-panel"],
   "permissions": ["core:default"]
 }

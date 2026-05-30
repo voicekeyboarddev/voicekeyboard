@@ -238,11 +238,19 @@ type OverlayState = {
 };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
-const isOverlay = new URLSearchParams(window.location.search).has("overlay");
+const queryParams = new URLSearchParams(window.location.search);
+const isOverlay = queryParams.has("overlay");
+const isPromptPanelWindow = queryParams.has("prompt-panel");
 if (isOverlay) {
   document.documentElement.classList.add("overlay-document");
   document.body.classList.add("overlay-document");
 }
+if (isPromptPanelWindow) {
+  document.documentElement.classList.add("prompt-panel-document");
+  document.body.classList.add("prompt-panel-document");
+}
+
+let promptPanelData: PromptPanelState | null = null;
 
 let snapshot: Snapshot | null = null;
 let activeTab: "main" | "diagnostics" | "settings" = "main";
@@ -484,8 +492,11 @@ function wrongOutputPanel(s: Snapshot) {
 }
 
 function renderOverlay() {
+  // The prompt-handoff popup lives in its own webview window now, so the orb
+  // overlay no longer needs to render the full panel — it only renders the
+  // small "expand" pill when the popup is collapsed.
   if (overlayState.state === "prompt-panel" && overlayState.prompt_panel) {
-    renderPromptPanel(overlayState.prompt_panel);
+    renderPromptCollapsedPill(overlayState.prompt_panel);
     return;
   }
   const title =
@@ -545,21 +556,31 @@ function renderOverlay() {
   bindOverlay();
 }
 
-function renderPromptPanel(panel: PromptPanelState) {
-  if (panel.collapsed) {
+function renderPromptCollapsedPill(panel: PromptPanelState) {
+  app.innerHTML = `
+    <main class="overlay-shell prompt-overlay collapsed">
+      <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.title)}</button>
+    </main>
+  `;
+  bindOverlay();
+}
+
+function renderPromptPanelWindow(panel: PromptPanelState | null) {
+  if (!panel) {
     app.innerHTML = `
-      <main class="overlay-shell prompt-overlay collapsed">
-        <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.title)}</button>
+      <main class="prompt-window-shell empty">
+        <p class="muted">No prompt-handoff result is active.</p>
       </main>
     `;
-    bindOverlay();
     return;
   }
-  const expectedId = panel.recording_id ? `expected-answer-${panel.recording_id}` : "expected-answer";
+  const expectedId = panel.recording_id
+    ? `expected-answer-${panel.recording_id}`
+    : "expected-answer";
   app.innerHTML = `
-    <main class="overlay-shell prompt-overlay">
+    <main class="prompt-window-shell">
       <section class="prompt-panel">
-        <div class="prompt-head">
+        <header class="prompt-head">
           <div>
             <strong>${esc(panel.title)}</strong>
             <span>${esc(panel.state)}${panel.delivery ? ` · ${esc(panel.delivery)}` : ""}</span>
@@ -568,13 +589,13 @@ function renderPromptPanel(panel: PromptPanelState) {
             <button class="secondary mini" data-overlay-cmd="prompt-collapse">Collapse</button>
             <button class="secondary mini" data-overlay-cmd="prompt-dismiss">Close</button>
           </div>
-        </div>
+        </header>
         ${panel.error ? `<div class="prompt-error">${esc(panel.error)}</div>` : ""}
         <label>
           <span>Transcript</span>
           <input readonly value="${esc(panel.transcript || "")}" />
         </label>
-        <label>
+        <label class="grow">
           <span>Result</span>
           <textarea id="prompt-result-text" readonly>${esc(panel.text || panel.source_output || "")}</textarea>
         </label>
@@ -586,7 +607,9 @@ function renderPromptPanel(panel: PromptPanelState) {
         ` : ""}
         <div class="prompt-actions">
           <button class="secondary" data-overlay-cmd="copy-prompt-result">Copy</button>
-          ${panel.can_save_wrong && panel.recording_id ? `<button class="danger" data-overlay-cmd="save-wrong-feedback">Save Wrong Output</button>` : ""}
+          ${panel.can_save_wrong && panel.recording_id
+            ? `<button class="danger" data-overlay-cmd="save-wrong-feedback">Save Wrong Output</button>`
+            : ""}
         </div>
       </section>
     </main>
@@ -1764,7 +1787,12 @@ async function runOverlayCommand(cmd: string) {
       return;
     }
     if (cmd === "save-wrong-feedback") {
-      const panel = overlayState.prompt_panel;
+      // In the dedicated prompt-panel window, `overlayState` is empty (we
+      // only subscribe to overlay-state in the orb window). Fall back to the
+      // panel-state that this window listens to.
+      const panel = isPromptPanelWindow
+        ? promptPanelData
+        : overlayState.prompt_panel;
       if (!panel?.recording_id) {
         // Make this visible so a "nothing happens" report is unambiguous.
         showOverlayBanner("No recording is available to save as wrong.");
@@ -1833,27 +1861,24 @@ async function boot() {
   if (isOverlay) {
     snapshot = await invoke("get_status");
     renderOverlay();
-    window.addEventListener("blur", () => {
-      // Auto-collapse the prompt-handoff result popup on blur, but NOT the
-      // wrong-output feedback popup the user opened from the Done card's ✕.
-      // Resize/show during the prompt-panel transition briefly drops focus on
-      // Windows, and that previously collapsed the feedback popup before the
-      // user could see it — looking to them like the card just closed.
-      const panel = overlayState.prompt_panel;
-      if (
-        overlayState.state === "prompt-panel" &&
-        panel &&
-        !panel.collapsed
-      ) {
-        invoke("set_prompt_panel_collapsed", { collapsed: true }).catch(() => {});
-      }
-    });
     await listen<OverlayState>("overlay-state", (event) => {
       overlayState = event.payload;
       renderOverlay();
     });
     await listen<Snapshot>("status", (event) => {
       snapshot = event.payload;
+    });
+    return;
+  }
+  if (isPromptPanelWindow) {
+    // Initial state comes from the status snapshot so we render correctly even
+    // if the window opens before the next prompt-panel-state event fires.
+    const initial = await invoke<Snapshot>("get_status");
+    promptPanelData = initial.prompt_panel ?? null;
+    renderPromptPanelWindow(promptPanelData);
+    await listen<PromptPanelState>("prompt-panel-state", (event) => {
+      promptPanelData = event.payload;
+      renderPromptPanelWindow(promptPanelData);
     });
     return;
   }
