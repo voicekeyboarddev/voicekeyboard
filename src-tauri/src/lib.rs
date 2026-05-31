@@ -199,48 +199,37 @@ impl AppCore {
     }
 
     fn mutate_prompt_panel(&self, update: impl FnOnce(&mut PromptPanelState)) {
-        // Track whether the change actually flipped the collapsed flag — if
-        // not, we don't need to touch the orb overlay window (which would
-        // otherwise re-emit overlay-state on every streaming chunk and reset
-        // the orb's breathing animation mid-stream).
-        let mut collapsed_changed = false;
+        // Refresh the orb overlay only when something it cares about has
+        // actually changed — the collapsed flag, or the panel.state moving
+        // between streaming/done/error. Otherwise streaming chunks (which
+        // only mutate `text`) would re-emit overlay-state at chunk rate and
+        // reset the orb's breathing animation mid-stream.
+        let mut overlay_refresh_needed = false;
         {
             let mut state = self.state.lock();
             if let Some(panel) = state.prompt_panel.as_mut() {
-                let before = panel.collapsed;
+                let before_collapsed = panel.collapsed;
+                let before_state = panel.state.clone();
                 update(panel);
-                collapsed_changed = before != panel.collapsed;
+                overlay_refresh_needed = before_collapsed != panel.collapsed
+                    || before_state != panel.state;
             }
         }
         self.emit_snapshot();
-        if collapsed_changed {
+        if overlay_refresh_needed {
             self.refresh_overlay_for_prompt_panel();
         }
         self.update_prompt_panel_window();
     }
 
-    /// After prompt-panel state changes, drive the orb overlay window to the
-    /// right surface: show the small "expand" pill while the popup is
-    /// collapsed, otherwise restore the orb to whatever it was showing before
-    /// the popup arrived.
+    /// After prompt-panel state changes, restore the orb overlay to whatever
+    /// it was last driven to (recording, processing, done, idle, ...). The
+    /// popup is its own decorated window with native minimize on its title
+    /// bar, so the orb no longer carries a "collapsed pill" surface — it
+    /// just keeps showing the real status.
     fn refresh_overlay_for_prompt_panel(&self) {
-        let (has_panel, collapsed, restore_state) = {
-            let state = self.state.lock();
-            (
-                state.prompt_panel.is_some(),
-                state
-                    .prompt_panel
-                    .as_ref()
-                    .map(|p| p.collapsed)
-                    .unwrap_or(false),
-                state.last_overlay_state.clone(),
-            )
-        };
-        if has_panel && collapsed {
-            self.update_overlay("prompt-panel", None);
-        } else {
-            self.update_overlay(&restore_state, None);
-        }
+        let restore_state = self.state.lock().last_overlay_state.clone();
+        self.update_overlay(&restore_state, None);
     }
 
     /// Drive the separate prompt-panel webview window: shown when the popup
@@ -265,19 +254,23 @@ impl AppCore {
                         let _ = window.hide();
                     }
                 } else {
-                    // Show without grabbing focus: the popup pops up while
-                    // the user's target app still has focus, and we MUST NOT
-                    // steal it — auto-inject (delivery=="keyboard") checks
-                    // `target_still_focused` and silently skips the injection
-                    // if focus moved. The user can click into the popup to
-                    // copy/edit; until then they're still in their target.
-                    // Guard the show/unminimize calls so streaming-chunk
-                    // updates don't bring the window to front repeatedly.
+                    // First-show grabs focus so blur-on-click-outside fires
+                    // and the user gets the "tap anywhere else to dismiss"
+                    // behaviour. This trades off auto-inject
+                    // (delivery=="keyboard") which checks
+                    // `target_still_focused` — focus stealing skips that
+                    // injection. Users who want auto-inject can disable
+                    // prompt_auto_inject_keyboard isn't really compatible
+                    // with the new "click-outside hides" popup model
+                    // anyway. The is_visible guard means streaming chunks
+                    // don't keep bouncing focus to the front.
                     if is_minimized {
                         let _ = window.unminimize();
                     }
                     if !is_visible {
+                        position_prompt_panel_window(&window);
                         let _ = window.show();
+                        let _ = window.set_focus();
                     }
                 }
             }
@@ -840,28 +833,16 @@ impl AppCore {
                     drop(gesture);
                     core.set_status("listening");
                     core.update_overlay("recording", None);
-                    // Keep the target app focused while the mouse is down. In terminals,
-                    // showing an overlay can cancel drag selection.
-                    let clipboard_core = Arc::clone(&core);
-                    std::thread::spawn(move || {
-                        let probe_skip_reason = clipboard_core
-                            .gesture
-                            .lock()
-                            .as_ref()
-                            .and_then(|session| {
-                                (session.start == start)
-                                    .then(|| clipboard_probe_skip_reason(session.context.as_ref()))
-                            })
-                            .flatten();
-                        if let Some(reason) = probe_skip_reason {
-                            clipboard_core.log(
-                                "debug",
-                                format!("skipped clipboard selection probe: {reason}"),
-                            );
-                            return;
-                        }
-                        capture_selection_with_clipboard_probe(&clipboard_core, start);
-                    });
+                    // The start-of-recording clipboard probe used to fire a
+                    // Ctrl+C the instant listening began. That sees only
+                    // whatever the user had highlighted at button-press
+                    // time, which is often empty / partial — and every probe
+                    // costs a real Ctrl+C send to the foreground app. The
+                    // release-time probe (in `pointer_up`) catches the
+                    // selection the user actually finished with, which is
+                    // what the request operates on. Skipping this initial
+                    // probe halves the number of Ctrl+C events we inject
+                    // while keeping selection accuracy intact.
                     let watchdog = Arc::clone(&core);
                     std::thread::spawn(move || {
                         std::thread::sleep(MAX_RECORDING_DURATION);
@@ -897,7 +878,7 @@ impl AppCore {
     }
 
     fn pointer_up(self: &Arc<Self>, button: TriggerButton, at: Instant, x: f64, y: f64) {
-        let Some(session) = self.gesture.lock().take() else {
+        let Some(mut session) = self.gesture.lock().take() else {
             return;
         };
         if session.button != button {
@@ -946,6 +927,22 @@ impl AppCore {
         }
 
         self.update_overlay("processing", None);
+
+        // Re-probe the selection right before the segment goes off to the
+        // model — captures whatever the user finished selecting just before
+        // they released the trigger, even if it changed during the recording.
+        // Costs ~85ms on the gesture thread; acceptable trade for accuracy.
+        if self.settings.lock().context_enabled {
+            let probe_start = Instant::now();
+            refresh_selection_at_release(&mut session);
+            self.log(
+                "debug",
+                format!(
+                    "release-time selection probe took {} ms",
+                    probe_start.elapsed().as_millis()
+                ),
+            );
+        }
 
         let core = Arc::clone(self);
         let initial_context = session.context.clone();
@@ -1491,7 +1488,7 @@ impl AppCore {
         });
 
         let stream_core = self.clone();
-        let response = self
+        let mut response = self
             .model
             .prompt_handoff(
                 &settings,
@@ -1508,6 +1505,43 @@ impl AppCore {
             )
             .await;
 
+        // Agentic Ctrl+C: model self-reports it couldn't see the operand and
+        // would like us to copy the foreground selection on its behalf. We
+        // probe once, augment the context with the captured selection, and
+        // re-invoke. One retry only — no chained loops — and only when the
+        // probe is actually allowed (terminals/canvas apps are skipped).
+        let mut effective_context = context.clone();
+        if let Ok(result) = response.as_ref() {
+            if result.needs_selection && result.text.trim().is_empty() {
+                if let Some(augmented) =
+                    self.try_agentic_selection_probe(effective_context.as_ref())
+                {
+                    effective_context = Some(augmented);
+                    self.mutate_prompt_panel(|panel| {
+                        panel.state = "streaming".to_string();
+                        panel.text.clear();
+                    });
+                    let retry_core = self.clone();
+                    response = self
+                        .model
+                        .prompt_handoff(
+                            &settings,
+                            &transcript,
+                            effective_context.as_ref(),
+                            Some(&wav_path),
+                            &recent_context,
+                            move |chunk| {
+                                retry_core.mutate_prompt_panel(|panel| {
+                                    panel.text.push_str(chunk);
+                                });
+                                Ok(())
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
+
         match response {
             Ok(mut result) => {
                 if result.used_media_fallback {
@@ -1519,7 +1553,7 @@ impl AppCore {
                 // of a PDF and asked for a translation). Override to "ui" so
                 // the result lands in the popup rather than being silently
                 // dropped by the auto-inject path.
-                if result.delivery == "keyboard" && !looks_typable(context.as_ref()) {
+                if result.delivery == "keyboard" && !looks_typable(effective_context.as_ref()) {
                     self.log(
                         "info",
                         "forcing prompt-handoff delivery=ui (no typable target focused)",
@@ -1544,7 +1578,7 @@ impl AppCore {
                 });
 
                 if result.delivery == "keyboard" && settings.prompt_auto_inject_keyboard {
-                    if target_still_focused(context.as_ref()) {
+                    if target_still_focused(effective_context.as_ref()) {
                         self.inject_actions_with_context(
                             vec![Action::Text {
                                 value: result.text.clone(),
@@ -1590,6 +1624,90 @@ impl AppCore {
                 self.set_status("error");
             }
         }
+    }
+
+    /// One-shot Ctrl+C probe driven by the model itself. Called only when
+    /// the prompt-handoff response had `needs_selection: true` and an empty
+    /// text. We skip if the foreground app isn't probe-friendly (terminals,
+    /// canvas apps), or if the context somehow already had a non-empty
+    /// selection (model misjudgement — don't waste a keystroke). Returns the
+    /// augmented context on success so the caller can re-invoke the model
+    /// with the captured selection wired in.
+    fn try_agentic_selection_probe(
+        &self,
+        context: Option<&WindowContext>,
+    ) -> Option<WindowContext> {
+        let already_has_selection = context
+            .and_then(|c| c.focused_text.as_ref())
+            .and_then(|f| f.selected_text.as_deref())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if already_has_selection {
+            self.log(
+                "debug",
+                "agentic Ctrl+C: model asked for selection but context already had one — skipping",
+            );
+            return None;
+        }
+        if let Some(reason) = clipboard_probe_skip_reason(context) {
+            self.log(
+                "info",
+                format!(
+                    "agentic Ctrl+C: model asked for selection but probe is skipped ({reason})"
+                ),
+            );
+            return None;
+        }
+        let captured = clipboard::capture_selection_via_clipboard()?;
+        let trimmed = captured.trim().to_string();
+        if trimmed.is_empty() {
+            self.log(
+                "info",
+                "agentic Ctrl+C: model asked for selection but Ctrl+C returned nothing",
+            );
+            return None;
+        }
+        self.log(
+            "info",
+            format!(
+                "agentic Ctrl+C: captured {} chars after model request",
+                trimmed.chars().count()
+            ),
+        );
+        let mut augmented = context.cloned().unwrap_or_else(|| WindowContext {
+            title: String::new(),
+            app_name: String::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            focused_text: None,
+            cursor_screenshot: None,
+        });
+        let mut ft = augmented
+            .focused_text
+            .clone()
+            .unwrap_or_else(|| FocusedTextContext {
+                source: "agentic Ctrl+C probe".to_string(),
+                element_name: None,
+                control_type: None,
+                class_name: None,
+                automation_id: None,
+                parent_name: None,
+                parent_class: None,
+                parent_control_type: None,
+                text_before_cursor: None,
+                selected_text: None,
+                text_after_cursor: None,
+                full_text: None,
+                truncated: false,
+                cursor_known: false,
+                element_bounds: None,
+            });
+        ft.selected_text = Some(trimmed);
+        if !ft.source.contains("agentic Ctrl+C") {
+            ft.source = format!("{} + agentic Ctrl+C probe", ft.source);
+        }
+        augmented.focused_text = Some(ft);
+        Some(augmented)
     }
 
     /// Show free-form text in the prompt-handoff popup as a "reply" — used
@@ -1837,24 +1955,21 @@ impl AppCore {
                 });
                 let (width, height) = overlay_dimensions(state);
                 let _ = window.set_size(tauri::LogicalSize::new(width, height));
-                // Only confirm/prompt-panel surfaces are interactive. The
-                // "done" card is status-only; making it interactive
-                // previously let a ✕ button be clickable but the feature was
-                // removed because of unsolvable Windows/WebView2 focus quirks
-                // (see commit history). The prompt-panel surface here is the
-                // small collapsed "expand" pill — it needs to receive clicks.
-                let _ = window
-                    .set_ignore_cursor_events(!matches!(state, "confirm" | "prompt-panel"));
+                // The orb is normally click-through (set_ignore_cursor_events
+                // true), but it needs to accept clicks for: (a) the
+                // pre-injection confirm card, and (b) the re-open affordance
+                // we now render on it whenever a prompt-handoff popup exists,
+                // since the popup auto-hides on blur and the orb is the only
+                // way to bring it back.
+                let has_panel = self.state.lock().prompt_panel.is_some();
+                let interactive = matches!(state, "confirm") || has_panel;
+                let _ = window.set_ignore_cursor_events(!interactive);
                 let _ = app.emit_to("overlay", "overlay-state", payload);
-                match state {
-                    "idle" if self.state.lock().prompt_panel.is_none() => {
-                        let _ = window.hide();
-                    }
-                    _ => {
-                        position_overlay(app);
-                        let _ = window.show();
-                    }
-                }
+                // The orb is the user's persistent status pill — keep it
+                // visible the whole time the app is operational, including
+                // at idle. Shutdown closes the window through app.exit.
+                position_overlay(app);
+                let _ = window.show();
             }
         }
     }
@@ -1971,19 +2086,21 @@ fn preserved_selection_context(context: Option<&WindowContext>) -> Option<Focuse
         .cloned()
 }
 
-fn capture_selection_with_clipboard_probe(core: &Arc<AppCore>, start: Instant) {
+/// Refresh the session's selection by re-running the clipboard probe right
+/// before processing starts (i.e. immediately on button release). The user
+/// may have been actively selecting text WHILE speaking — the start-of-
+/// recording probe only sees whatever was selected the moment they pressed
+/// the trigger, which is often partial or empty. Probing again at release
+/// captures the final selection state and replaces the earlier value.
+fn refresh_selection_at_release(session: &mut GestureSession) {
+    if clipboard_probe_skip_reason(session.context.as_ref()).is_some() {
+        return;
+    }
     let Some(captured) = clipboard::capture_selection_via_clipboard() else {
         return;
     };
     let trimmed = captured.trim().to_string();
     if trimmed.is_empty() {
-        return;
-    }
-    let mut gesture = core.gesture.lock();
-    let Some(session) = gesture.as_mut() else {
-        return;
-    };
-    if session.start != start {
         return;
     }
     let mut ctx = session.context.clone().unwrap_or_else(|| WindowContext {
@@ -1994,48 +2111,31 @@ fn capture_selection_with_clipboard_probe(core: &Arc<AppCore>, start: Instant) {
         focused_text: None,
         cursor_screenshot: None,
     });
-    let mut ft = ctx
-        .focused_text
-        .clone()
-        .unwrap_or_else(|| FocusedTextContext {
-            source: "clipboard probe".to_string(),
-            element_name: None,
-            control_type: None,
-            class_name: None,
-            automation_id: None,
-            parent_name: None,
-            parent_class: None,
-            parent_control_type: None,
-            text_before_cursor: None,
-            selected_text: None,
-            text_after_cursor: None,
-            full_text: None,
-            truncated: false,
-            cursor_known: false,
-            element_bounds: None,
-        });
-    let already_has_selection = ft
-        .selected_text
-        .as_ref()
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
-    if !already_has_selection {
-        ft.selected_text = Some(trimmed.clone());
-        ft.source = if ft.source == "clipboard probe" {
-            "clipboard probe".to_string()
-        } else {
-            format!("{} + clipboard", ft.source)
-        };
+    let mut ft = ctx.focused_text.clone().unwrap_or_else(|| FocusedTextContext {
+        source: "clipboard probe @ release".to_string(),
+        element_name: None,
+        control_type: None,
+        class_name: None,
+        automation_id: None,
+        parent_name: None,
+        parent_class: None,
+        parent_control_type: None,
+        text_before_cursor: None,
+        selected_text: None,
+        text_after_cursor: None,
+        full_text: None,
+        truncated: false,
+        cursor_known: false,
+        element_bounds: None,
+    });
+    // Always overwrite — the release-time selection is the authoritative
+    // one for the request.
+    ft.selected_text = Some(trimmed);
+    if !ft.source.contains("release probe") {
+        ft.source = format!("{} + release probe", ft.source);
     }
     ctx.focused_text = Some(ft);
     session.context = Some(ctx);
-    core.log(
-        "info",
-        format!(
-            "captured {} chars of selected text via clipboard probe",
-            trimmed.chars().count()
-        ),
-    );
 }
 
 fn short_overlay_error(prefix: &str) -> String {
@@ -2950,10 +3050,6 @@ fn looks_typable(context: Option<&WindowContext>) -> bool {
 fn overlay_dimensions(state: &str) -> (f64, f64) {
     if state == "confirm" {
         (430.0, 214.0)
-    } else if state == "prompt-panel" {
-        // Just the collapsed "expand prompt result" pill — the full popup is
-        // its own decorated, resizable window now.
-        (280.0, 64.0)
     } else {
         (360.0, 96.0)
     }
@@ -2970,11 +3066,17 @@ fn create_overlay_window(app: &tauri::App) -> tauri::Result<()> {
             .always_on_top(true)
             .skip_taskbar(true)
             .resizable(false)
+            // Start hidden so the first paint happens AFTER position_overlay
+            // snaps the window to the bottom-centre — otherwise it briefly
+            // flashes at the top-left default spot. We show it explicitly
+            // below once positioned, since the orb is meant to be the
+            // user's always-on status pill while the app runs.
             .visible(false)
             .shadow(false)
             .build()?;
     let _ = overlay.set_ignore_cursor_events(true);
     position_overlay(app.handle());
+    let _ = overlay.show();
     Ok(())
 }
 
@@ -2991,12 +3093,20 @@ fn create_prompt_panel_window(app: &tauri::App) -> tauri::Result<()> {
         WebviewUrl::App("index.html?prompt-panel".into()),
     )
     .title("Prompt handoff result")
-    .inner_size(660.0, 480.0)
-    .min_inner_size(480.0, 320.0)
+    // Wider than tall on purpose: text wraps comfortably horizontally and
+    // long results scroll inside the panel instead of pushing the window
+    // far up the screen above the orb. The user can resize freely.
+    .inner_size(760.0, 280.0)
+    .min_inner_size(440.0, 220.0)
     .resizable(true)
     .decorations(true)
     .visible(false)
-    .always_on_top(true)
+    // NOT always-on-top: keeping focus normal lets Windows give focus back
+    // to the user's target app when the popup hides. Always-on-top + focus
+    // stealing leaves the foreground stack in a confused state — the user
+    // experiences this as the app "getting stuck" after closing the popup.
+    // The orb is the affordance to bring the popup back to front.
+    .always_on_top(false)
     .skip_taskbar(false)
     .build()?;
     position_prompt_panel_window(&window);
@@ -3013,11 +3123,18 @@ fn position_prompt_panel_window(window: &tauri::WebviewWindow) {
             .inner_size()
             .ok()
             .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
-            .unwrap_or((660.0, 480.0));
-        // Sit just above the bottom-centered overlay orb so the two surfaces
-        // read as related but stay independent.
+            .unwrap_or((760.0, 280.0));
+        // Anchor the popup just above the bottom-centred orb so it reads as
+        // a popup originating from the orb. Numbers mirror the orb's own
+        // layout: 360-wide × 96-tall with a 28px bottom margin. We re-anchor
+        // every time the popup is shown (see update_prompt_panel_window) so
+        // the user dragging the orb's window around doesn't strand the popup.
+        let orb_height = 96.0;
+        let orb_bottom_margin = 28.0;
+        let gap_above_orb = 8.0;
         let x = ((logical_width - window_size.0) / 2.0).max(12.0);
-        let y = (logical_height - window_size.1 - 180.0).max(12.0);
+        let y = (logical_height - orb_bottom_margin - orb_height - gap_above_orb - window_size.1)
+            .max(12.0);
         let _ = window.set_position(tauri::LogicalPosition::new(x, y));
     }
 }
@@ -3198,6 +3315,30 @@ fn set_prompt_panel_collapsed(core: tauri::State<'_, Arc<AppCore>>, collapsed: b
 #[tauri::command]
 fn dismiss_prompt_panel(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
     core.set_prompt_panel(None);
+    core.snapshot()
+}
+
+/// Re-show the prompt-panel popup window from the orb's re-open affordance.
+/// Used by the orb's click handler: the popup auto-hides on blur (click
+/// outside), and this brings it back.
+#[tauri::command]
+fn reopen_prompt_panel(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
+    if core.state.lock().prompt_panel.is_some() {
+        // Mark the panel as not-collapsed so the orb button flips to
+        // "Hide result" once the snapshot round-trips. Also drives
+        // update_prompt_panel_window via mutate_prompt_panel.
+        core.mutate_prompt_panel(|panel| {
+            panel.collapsed = false;
+        });
+        if let Some(app) = core.app.lock().clone() {
+            if let Some(window) = app.get_webview_window("prompt-panel") {
+                position_prompt_panel_window(&window);
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    }
     core.snapshot()
 }
 
@@ -3415,6 +3556,30 @@ async fn reset_llama_backend(
     Ok(core.snapshot())
 }
 
+/// Dev-only: fake-fires a prompt-handoff popup with sample text so the
+/// popup window can be verified without doing a real voice recording.
+#[tauri::command]
+fn test_prompt_popup(core: tauri::State<'_, Arc<AppCore>>) -> StatusSnapshot {
+    let long_text = (1..=40)
+        .map(|i| {
+            format!(
+                "{i:02}. Lorem ipsum dolor sit amet, consectetur adipiscing elit. \
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad \
+minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea \
+commodo consequat."
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    core.show_text_reply_popup(
+        9999,
+        "Test transcript: translate this".to_string(),
+        long_text,
+        "DEV TEST".to_string(),
+    );
+    core.snapshot()
+}
+
 #[tauri::command]
 fn test_parsing(core: tauri::State<'_, Arc<AppCore>>, input: String) -> StatusSnapshot {
     let settings = core.settings.lock().clone();
@@ -3529,14 +3694,63 @@ pub fn run() {
                     });
                 }
             } else if window.label() == "prompt-panel" {
-                // Treat the native close button as "dismiss the handoff" —
-                // hide the popup, drop the panel state, and let the orb
-                // restore itself. Without preventing the close, Tauri would
-                // destroy the window and our next show() call would silently
-                // do nothing.
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    core_for_panel_close.set_prompt_panel(None);
+                match event {
+                    // Native close button: dismiss the handoff. Spawn so
+                    // this closure (on the UI thread) returns immediately
+                    // — doing window/state work inline blocks the event
+                    // loop and the user sees the app freeze the instant
+                    // they hit the X icon. The in-popup Close button
+                    // doesn't hit this path; it goes through invoke().
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let core = core_for_panel_close.clone();
+                        tauri::async_runtime::spawn(async move {
+                            core.set_prompt_panel(None);
+                        });
+                    }
+                    // Click-outside-to-hide: when the popup loses focus we
+                    // tuck it away. The user can bring it back via the
+                    // re-open button on the orb. We only hide once the
+                    // result has finished streaming AND a small debounce
+                    // window has passed without the popup regaining focus.
+                    // The debounce smooths over WebView2's focus jitter
+                    // (it briefly drops focus during resource loads / DOM
+                    // emits) so streaming results aren't yanked away.
+                    WindowEvent::Focused(false) => {
+                        let core = core_for_panel_close.clone();
+                        let window_clone = window.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(220)).await;
+                            // Skip if the panel is gone or focus came back
+                            // during the debounce.
+                            let panel_done = core
+                                .state
+                                .lock()
+                                .prompt_panel
+                                .as_ref()
+                                .map(|p| p.state == "done")
+                                .unwrap_or(false);
+                            if !panel_done {
+                                return;
+                            }
+                            if window_clone.is_focused().unwrap_or(false) {
+                                return;
+                            }
+                            if window_clone.is_visible().unwrap_or(false) {
+                                // Flip the panel's collapsed flag so the
+                                // orb button switches back to "Show
+                                // result". Without this the JS still
+                                // thinks the popup is on screen and
+                                // renders "Hide result" even though we
+                                // just hid it.
+                                core.mutate_prompt_panel(|panel| {
+                                    panel.collapsed = true;
+                                });
+                                let _ = window_clone.hide();
+                            }
+                        });
+                    }
+                    _ => {}
                 }
             }
         })
@@ -3555,6 +3769,7 @@ pub fn run() {
             save_feedback_example,
             set_prompt_panel_collapsed,
             dismiss_prompt_panel,
+            reopen_prompt_panel,
             open_dataset_folder,
             open_models_folder,
             get_model_setup_info,
@@ -3567,6 +3782,7 @@ pub fn run() {
             test_model,
             reset_llama_backend,
             test_parsing,
+            test_prompt_popup,
             play_recording,
             test_injection
         ])

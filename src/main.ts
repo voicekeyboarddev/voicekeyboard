@@ -492,28 +492,63 @@ function wrongOutputPanel(s: Snapshot) {
 }
 
 function renderOverlay() {
-  // The prompt-handoff popup lives in its own webview window now, so the orb
-  // overlay no longer needs to render the full panel — it only renders the
-  // small "expand" pill when the popup is collapsed.
-  if (overlayState.state === "prompt-panel" && overlayState.prompt_panel) {
-    renderPromptCollapsedPill(overlayState.prompt_panel);
-    return;
-  }
+  // The prompt-handoff popup lives in its own decorated webview window with
+  // a native minimize button on its title bar — the orb overlay no longer
+  // has a "collapsed pill" surface to render.
+  //
+  // When a prompt-handoff popup is active we surface the popup's own
+  // streaming/done state on the orb too, so the user gets a status read
+  // even while the popup is hidden. Without this the orb gets stuck on
+  // whatever state it was last driven to (usually "Processing / Local
+  // model is thinking.") even after the handoff has long since finished.
+  //
+  // BUT active recording/processing always wins — if the user is talking
+  // to the orb again, the orb must reflect *that*, not the stale
+  // "Result ready" from the previous handoff. Otherwise the user can't
+  // tell whether their new gesture was even picked up.
+  const panel = overlayState.prompt_panel ?? null;
+  const orbBusy =
+    overlayState.state === "recording" ||
+    overlayState.state === "processing" ||
+    overlayState.state === "transcript" ||
+    overlayState.state === "injecting" ||
+    overlayState.state === "confirm";
+  const showPanelOnOrb = !!panel && !orbBusy;
+  const panelTitle = showPanelOnOrb && panel
+    ? panel.state === "streaming"
+      ? "Thinking…"
+      : panel.state === "done"
+        ? "Result ready"
+        : panel.state === "error"
+          ? "Handoff failed"
+          : panel.title || "Voice Keyboard"
+    : null;
+  const panelDetail = showPanelOnOrb && panel
+    ? panel.state === "streaming"
+      ? "Streaming the result into the popup."
+      : panel.state === "done"
+        ? (panel.collapsed
+            ? "Click “Show result” on the right to view it."
+            : "Result is showing in the popup.")
+        : panel.error || ""
+    : null;
   const title =
-    overlayState.state === "recording" ? "Recording" :
+    panelTitle ??
+    (overlayState.state === "recording" ? "Recording" :
     overlayState.state === "processing" ? "Processing" :
     overlayState.state === "transcript" ? "Transcript" :
     overlayState.state === "injecting" ? "Injecting" :
     overlayState.state === "done" ? "Done" :
     overlayState.state === "confirm" ? "Confirm" :
     overlayState.state === "blocked" ? "Blocked" :
-    overlayState.state === "error" ? "Error" : "Voice Keyboard";
-  const detail =
+    overlayState.state === "error" ? "Error" : "Voice Keyboard");
+  const fallbackDetail =
     overlayState.text ||
     (overlayState.state === "recording" ? "Release mouse to transcribe" :
     overlayState.state === "processing" ? "Listening ended. Local model is thinking." :
     overlayState.state === "injecting" ? "Sending actions to the active app." :
     "Ready");
+  const detail = panelDetail ?? fallbackDetail;
   if (overlayState.state === "confirm") {
     app.innerHTML = `
       <main class="overlay-shell confirm-overlay">
@@ -542,24 +577,27 @@ function renderOverlay() {
     bindOverlay();
     return;
   }
+  const hasPanel = !!overlayState.prompt_panel;
+  // Button text/command tracks whether the popup is currently visible.
+  // panel.collapsed === false means the popup is on screen → offer Hide.
+  // panel.collapsed === true (user dismissed, or auto-hide on focus-loss)
+  // means it's tucked away → offer Show.
+  const popupVisible = hasPanel && !overlayState.prompt_panel?.collapsed;
+  const orbBtnLabel = popupVisible ? "Hide result" : "Show result";
+  const orbBtnCmd = popupVisible ? "prompt-hide" : "prompt-reopen";
+  const orbBtnTitle = popupVisible ? "Hide prompt result" : "Show prompt result";
   app.innerHTML = `
     <main class="overlay-shell ${esc(overlayState.state)}">
-      <div class="overlay-glass">
+      <div class="overlay-glass${hasPanel ? " has-panel" : ""}">
         <div class="orb"><span></span></div>
         <div class="overlay-copy">
           <strong>${esc(title)}</strong>
           <p>${esc(detail)}</p>
         </div>
+        ${hasPanel
+          ? `<button class="orb-reopen" data-overlay-cmd="${orbBtnCmd}" title="${orbBtnTitle}">${orbBtnLabel}</button>`
+          : ""}
       </div>
-    </main>
-  `;
-  bindOverlay();
-}
-
-function renderPromptCollapsedPill(panel: PromptPanelState) {
-  app.innerHTML = `
-    <main class="overlay-shell prompt-overlay collapsed">
-      <button class="prompt-expand" data-overlay-cmd="prompt-expand">${esc(panel.title)}</button>
     </main>
   `;
   bindOverlay();
@@ -574,9 +612,6 @@ function renderPromptPanelWindow(panel: PromptPanelState | null) {
     `;
     return;
   }
-  const expectedId = panel.recording_id
-    ? `expected-answer-${panel.recording_id}`
-    : "expected-answer";
   app.innerHTML = `
     <main class="prompt-window-shell">
       <section class="prompt-panel">
@@ -586,29 +621,18 @@ function renderPromptPanelWindow(panel: PromptPanelState | null) {
             <span>${esc(panel.state)}${panel.delivery ? ` · ${esc(panel.delivery)}` : ""}</span>
           </div>
           <div class="row">
-            <button class="secondary mini" data-overlay-cmd="prompt-collapse">Collapse</button>
             <button class="secondary mini" data-overlay-cmd="prompt-dismiss">Close</button>
           </div>
         </header>
         ${panel.error ? `<div class="prompt-error">${esc(panel.error)}</div>` : ""}
-        <label>
-          <span>Transcript</span>
-          <input readonly value="${esc(panel.transcript || "")}" />
-        </label>
         <label class="grow">
           <span>Result</span>
           <textarea id="prompt-result-text" readonly>${esc(panel.text || panel.source_output || "")}</textarea>
         </label>
-        ${panel.can_save_wrong ? `
-          <label>
-            <span>Expected behavior/output (optional)</span>
-            <textarea id="${expectedId}" class="expected-feedback" placeholder="What should have been typed or done instead?"></textarea>
-          </label>
-        ` : ""}
         <div class="prompt-actions">
           <button class="secondary" data-overlay-cmd="copy-prompt-result">Copy</button>
           ${panel.can_save_wrong && panel.recording_id
-            ? `<button class="danger" data-overlay-cmd="save-wrong-feedback">Save Wrong Output</button>`
+            ? `<button class="danger" data-overlay-cmd="save-wrong-feedback">Mark wrong</button>`
             : ""}
         </div>
       </section>
@@ -775,6 +799,7 @@ function diagnostics(s: Snapshot) {
           <button data-cmd="test-injection">Test injection dry-run</button>
           <button data-cmd="calibrate-audio">Calibrate mic sensitivity</button>
           <button class="secondary" data-cmd="open-models-folder">Open models folder</button>
+          <button class="secondary" data-cmd="test-prompt-popup">Test prompt popup</button>
         </div>
         <label class="field">
           <span>Parser input</span>
@@ -1653,6 +1678,7 @@ async function runCommand(cmd: string) {
       showSettingsFeedback("llama.cpp backend reset complete");
     }
     if (cmd === "test-injection") next = await invoke("test_injection");
+    if (cmd === "test-prompt-popup") next = await invoke("test_prompt_popup");
     if (cmd === "open-dataset-folder") { await invoke("open_dataset_folder"); return; }
     if (cmd === "open-models-folder") { await invoke("open_models_folder"); return; }
     if (cmd === "refresh-model-setup") {
@@ -1769,16 +1795,19 @@ async function selectLocalModelPath(path: string) {
 
 async function runOverlayCommand(cmd: string) {
   try {
-    if (cmd === "prompt-collapse") {
-      snapshot = await invoke("set_prompt_panel_collapsed", { collapsed: true });
-      return;
-    }
-    if (cmd === "prompt-expand") {
-      snapshot = await invoke("set_prompt_panel_collapsed", { collapsed: false });
-      return;
-    }
     if (cmd === "prompt-dismiss") {
       snapshot = await invoke("dismiss_prompt_panel");
+      return;
+    }
+    if (cmd === "prompt-reopen") {
+      snapshot = await invoke("reopen_prompt_panel");
+      return;
+    }
+    if (cmd === "prompt-hide") {
+      // Stash the popup but keep the panel state so the user can bring it
+      // back via Show result. Mirrors what the native title-bar minimize
+      // does, plus updates `collapsed` so the orb button flips its label.
+      snapshot = await invoke("set_prompt_panel_collapsed", { collapsed: true });
       return;
     }
     if (cmd === "copy-prompt-result") {
@@ -1880,6 +1909,10 @@ async function boot() {
       promptPanelData = event.payload;
       renderPromptPanelWindow(promptPanelData);
     });
+    // Click-outside-to-hide is driven from the Rust side
+    // (WindowEvent::Focused(false)) which is more reliable than a JS blur
+    // listener — WebView2's window-blur events in Tauri don't fire
+    // consistently for clicks landing on other apps.
     return;
   }
   snapshot = await invoke("get_status");

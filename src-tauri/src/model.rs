@@ -43,6 +43,11 @@ pub struct StreamingInterpretation {
 pub struct PromptHandoffResponse {
     pub delivery: String,
     pub text: String,
+    /// Model self-reported that the prompt operand was missing and a fresh
+    /// Ctrl+C-style selection probe would help. The caller is expected to
+    /// honour this once per request (single retry; no chained loops) and
+    /// only when the foreground app actually supports a clipboard probe.
+    pub needs_selection: bool,
     pub response: ModelResponse,
     pub used_media_fallback: bool,
 }
@@ -557,12 +562,24 @@ impl ModelClient {
             .unwrap_or_default()
             .trim()
             .to_string();
-        if text.is_empty() {
-            anyhow::bail!("prompt handoff JSON did not contain non-empty text");
+        let needs_selection = value
+            .get("needs_selection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        // Empty text is allowed only when the model explicitly signals it
+        // needs a selection probe — the caller is expected to do the probe
+        // and re-invoke. Any other empty result is a bug.
+        if text.is_empty() && !needs_selection {
+            let snippet: String = content.chars().take(240).collect();
+            anyhow::bail!(
+                "model returned no usable text — usually means no selection \
+was captured or the request was ambiguous. Raw envelope: {snippet}"
+            );
         }
         Ok(PromptHandoffResponse {
             delivery,
             text,
+            needs_selection,
             response: interpreted.response,
             used_media_fallback,
         })
@@ -1293,13 +1310,20 @@ Apply the instruction faithfully:\n\
 - Expand / shorten / simplify: adjust length or complexity while preserving the operand's intent.\n\
 \n\
 Return exactly one JSON object and no Markdown/code fence/explanation outside it:\n\
-{{\"delivery\":\"ui\"|\"keyboard\",\"text\":\"...\"}}\n\
+{{\"delivery\":\"ui\"|\"keyboard\",\"text\":\"...\",\"needs_selection\":false}}\n\
 \n\
 Delivery rules:\n\
 - Use \"keyboard\" whenever the user has selected text or is clearly editing a field — the transformed output should replace the selection or be inserted in the field. This is the default for rewrite/translate/summarize-the-selection tasks.\n\
 - Use \"ui\" only for direct questions, explanations, or summaries the user wants to READ rather than insert (e.g. 'what does this mean', 'explain this code', with no selection to replace).\n\
 - The app decides insert vs replace from the captured selection; do not include labels like Insert or Replace in the text. Do not wrap output in quotes. Do not add commentary.\n\
 - Output only the final useful content in the 'text' field — the result of applying the instruction to the operand.\n\
+\n\
+needs_selection rule (agentic Ctrl+C):\n\
+- Default is false. Only set \"needs_selection\":true when ALL three are true: (1) the user's instruction clearly operates on an operand ('translate this', 'summarize the selection', 'rewrite that', 'explain this code'), (2) no operand text appears in the context above (no Currently selected text, no SELECTED span, the field state is empty or shows only the user's own typing), AND (3) the app is the kind where a Ctrl+C would plausibly copy something (a browser, editor, PDF reader, document — NOT a terminal or canvas-only app).\n\
+- When you set needs_selection=true, leave 'text' as an empty string and pick any 'delivery' value; the app will Ctrl+C-probe the foreground app, capture the selection, and re-invoke you with the operand attached. You'll then produce the real answer.\n\
+- Do NOT set needs_selection=true just because you're unsure — only when an operand is clearly required by the instruction but is missing from the context. Use it sparingly; an unhelpful probe wastes a keystroke in the user's app.\n\
+\n\
+- NEVER return an empty 'text' field UNLESS needs_selection=true. If you can't fulfil the request for any other reason (ambiguous instruction, unsafe content, you're unsure), switch delivery to \"ui\" and put a short plain-English explanation of WHY in 'text' (e.g. \"Please clarify what 'this' refers to.\"). Empty text without needs_selection=true is always a bug.\n\
 \n\
 {recent_context_section}{context_text}\n\
 Transcript/request: {transcript}\n\
